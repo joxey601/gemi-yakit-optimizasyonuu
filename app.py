@@ -19,8 +19,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.4 (Smart JIT Dashboard)")
-st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS | **JIT Logistics**")
+st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.6 (Dynamic JIT)")
+st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS | **Port Operations**")
 st.markdown("---")
 
 # Session State Başlatmaları
@@ -152,6 +152,12 @@ st.sidebar.header("📡 2. Uydu & AIS Bağlantıları")
 api_key_global = st.sidebar.text_input("OpenWeather API Key:", type="password")
 ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password", help="Tüm rota üzerindeki canlı gemi trafiğini görmek için girin.")
 
+# --- YENİ EKLENEN LİMAN OPERASYON BÖLÜMÜ ---
+st.sidebar.markdown("---")
+st.sidebar.header("🏗️ 3. Liman Operasyon Verileri")
+port_handling_time = st.sidebar.number_input("Ortalama Elleçleme (Saat/Gemi)", value=12.0, step=1.0, help="Varış limanında bir geminin ortalama yükleme/boşaltma süresi.")
+port_terminals = st.sidebar.number_input("Aktif Rıhtım Sayısı", value=3, min_value=1, step=1, help="Limanda aynı anda işlem görebilecek maksimum gemi sayısı.")
+
 ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 
 # =============================================================================
@@ -252,8 +258,14 @@ with st.expander("📊 Sanal Sefer Verisi Üret ve Analiz Et", expanded=False):
                     text=df_sub['Beaufort'], hovertemplate="Hız: %{x} Kn<br>Yakıt: %{y} Ton<br>Beaufort: %{text}"
                 ))
                 
-        fig_scatter.update_layout(title='Hız ve Yakıt Tüketimi', xaxis_title='Gemi Hızı (Knot)', yaxis_title='Günlük Yakıt Tüketimi (Ton)', height=500)
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        fig_scatter.update_layout(
+            title='Hız ve Yakıt Tüketimi', 
+            xaxis_title='Gemi Hızı (Knot)', 
+            yaxis_title='Günlük Yakıt Tüketimi (Ton)', 
+            height=500,
+            dragmode='pan'
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True, config={'scrollZoom': True})
 
         avg_fuel_sim = st.session_state.df_sim['Günlük Yakıt (Ton)'].mean()
         avg_speed_sim = st.session_state.df_sim['Hız (Knot)'].mean()
@@ -339,7 +351,6 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         else:
             route_segments.append({'coords': route_coords, 'color': 'lime', 'bft': 3})
             
-        # CANLI GEMİLERİ ÇEKME
         live_vessels = []
         port_vessels_count = 0
         if ais_api_key:
@@ -372,8 +383,10 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         _, ai_cii_grade = calculate_cii_grade(daily_fuel, chosen_speed, dwt, ref_cii)
         _, bad_cii_grade = calculate_cii_grade(bad_daily_fuel, max_speed, dwt, ref_cii)
         
-        # --- JIT HESAPLAMALARI ---
-        jit_wait_hours = port_vessels_count * 2.0 
+        # --- YENİ EKLENEN KUYRUK TEORİSİ MATEMATİĞİ (DİNAMİK JIT) ---
+        # Bekleme Süresi = (Limandaki Gemi Sayısı * Elleçleme Süresi) / Rıhtım Sayısı
+        jit_wait_hours = (port_vessels_count * port_handling_time) / port_terminals
+        
         jit_target_days = days_on_route + (jit_wait_hours / 24.0)
         jit_speed = total_distance_nm / (jit_target_days * 24)
         
@@ -411,6 +424,7 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         fig.update_layout(
             title_text=f'Gerçek Deniz Yolu Navigasyonu (Ortalama Hava: {avg_bft} Bft)',
             showlegend=True,
+            dragmode='pan',
             legend=dict(
                 orientation="h", 
                 yanchor="top",
@@ -431,21 +445,21 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
             height=500, 
             margin=dict(l=0, r=0, t=40, b=0)
         )
-        st.plotly_chart(fig, use_container_width=True)
         
-        # --- [GÜNCELLENDİ] HER ZAMAN GÖRÜNEN JIT PANELİ ---
+        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+        
         st.markdown("### 🧠 Yapay Zeka JIT (Just-in-Time) Karar Destek Mekanizması")
         if not ais_api_key:
             st.warning("⚠️ **Veri Bekleniyor:** Liman yoğunluğunu analiz edip hız tavsiyesi verebilmemiz için lütfen sol menüden AISStream API şifresini girin.")
         else:
             if port_vessels_count > 0:
                 if jit_savings > 0:
-                    st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı ve demir sahası etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Eğer mevcut {chosen_speed:.1f} knot hızınızla giderseniz, geminiz tahmini **{jit_wait_hours:.0f} saat** boyunca demirde beklemek zorunda kalacak.")
-                    st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Ana makine hızınızı **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir (sıfır bekleme) ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
+                    st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı ve demir sahası etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Belirlediğiniz operasyon verilerine (gemi başı {port_handling_time} saat ve {port_terminals} rıhtım) göre tahmini bekleme süreniz **{jit_wait_hours:.0f} saat** olacaktır.")
+                    st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Ana makine hızınızı uygulanan {chosen_speed:.1f} knot hızından **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir (sıfır bekleme) ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
                 else:
-                    st.info(f"ℹ️ {dest_port} limanında trafik var ancak mevcut hızınız ({chosen_speed:.1f} knot) zaten JIT optimizasyonu için ideal aralıkta. Ekstra hız kesmeye gerek duyulmadı.")
+                    st.info(f"ℹ️ {dest_port} limanında trafik var ancak uygulanan hızınız ({chosen_speed:.1f} knot) JIT optimizasyonu için ideal aralıkta. Ekstra hız kesmeye gerek duyulmadı.")
             else:
-                st.success(f"✅ **LİMAN AÇIK:** AIS verilerine göre şu an {dest_port} limanında bekleyen gemi tespit edilmedi. Planlanan {chosen_speed:.1f} knot hızla limana bekleme yapmadan yanaşabilirsiniz.")
+                st.success(f"✅ **LİMAN AÇIK:** AIS verilerine göre şu an {dest_port} limanında bekleyen gemi tespit edilmedi. Uygulanan {chosen_speed:.1f} knot hızla limana bekleme yapmadan yanaşabilirsiniz.")
         st.markdown("---")
 
         st.subheader("📊 Seyir ve Optimizasyon Raporu")
@@ -475,5 +489,5 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         fig_curve.add_trace(go.Scatter(x=[chosen_speed], y=[total_fuel], mode='markers+text', name='AI Optimizasyonu', marker=dict(color='#2ecc71', size=14), text=['✅ AI Seçimi'], textposition='bottom right'))
         fig_curve.add_trace(go.Scatter(x=[chosen_speed, chosen_speed, max_speed], y=[total_fuel, bad_total_fuel, bad_total_fuel], mode='lines', line=dict(color='gray', width=2, dash='dash'), showlegend=False))
         fig_curve.add_annotation(x=(chosen_speed + max_speed)/2, y=bad_total_fuel, text=f"Tasarruf: {bad_total_fuel - total_fuel:,.0f} Ton", showarrow=True, arrowhead=2, ax=0, ay=-30, font=dict(color="green", size=13))
-        fig_curve.update_layout(title='Yapay Zeka Dinamik Hız Optimizasyonu', xaxis_title='Gemi Hızı (Knot)', yaxis_title='Toplam Sefer Yakıtı (Ton)', height=400)
-        col_g2.plotly_chart(fig_curve, use_container_width=True)
+        fig_curve.update_layout(title='Yapay Zeka Dinamik Hız Optimizasyonu', xaxis_title='Gemi Hızı (Knot)', yaxis_title='Toplam Sefer Yakıtı (Ton)', height=400, dragmode='pan')
+        col_g2.plotly_chart(fig_curve, use_container_width=True, config={'scrollZoom': True})
