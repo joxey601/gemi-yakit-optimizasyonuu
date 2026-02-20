@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.1 (Academic & Extended Radar)")
+st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.2 (Full Route Radar)")
 st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS")
 st.markdown("---")
 
@@ -43,45 +43,33 @@ def get_live_weather_by_coords(lat, lon, api_key):
     except: return None, 4
 
 def calculate_instant_fuel(speed, draft, wind_area, beaufort, des_spd, des_dft, des_cons, beam):
-    """
-    MDPI & ISO 15016 tabanlı hidrodinamik ve aerodinamik direnç hesaplayıcı.
-    """
-    # 1. Hız ve Tasarım Sabitleri
     v_ship_ms = speed * 0.5144
-    p_des_kw = (des_cons * 1000000) / (24 * 175) # 175 g/kWh optimum sfoc varsayımı
+    p_des_kw = (des_cons * 1000000) / (24 * 175) 
     
-    # Sakin Su Gücü 
     p_calm_kw = p_des_kw * ((speed / des_spd)**3) * ((draft / des_dft)**(2/3))
     
-    # 2. ISO 15016 Rüzgar Direnci (R_AA)
     wind_speed_ms = 0.836 * (beaufort ** 1.5)
-    v_rel_ms = v_ship_ms + wind_speed_ms # Baştan rüzgar senaryosu
-    rho_air = 1.225 # Havanın özkütlesi (kg/m3)
-    c_aa = 0.8 # Ortalama aerodinamik katsayı
+    v_rel_ms = v_ship_ms + wind_speed_ms 
+    rho_air = 1.225 
+    c_aa = 0.8 
     r_aa_newton = 0.5 * rho_air * c_aa * wind_area * (v_rel_ms ** 2)
     p_wind_kw = (r_aa_newton * v_ship_ms) / 1000
     
-    # 3. ITTC / STAwave-1 Dalga Direnci (R_wave)
-    rho_water = 1025 # Deniz suyu özkütlesi
+    rho_water = 1025 
     g = 9.81
-    h_s = 0.2 * (beaufort ** 2) # Belirgin dalga yüksekliği
-    l_wl = beam * 6.5 # Su hattı boyu tahmini
+    h_s = 0.2 * (beaufort ** 2) 
+    l_wl = beam * 6.5 
     if l_wl <= 0: l_wl = 100
     r_wave_newton = (1/16) * rho_water * g * (h_s ** 2) * beam * math.sqrt(beam / l_wl)
     p_wave_kw = (r_wave_newton * v_ship_ms) / 1000
     
-    # Toplam Gerekli Güç
     p_total_kw = p_calm_kw + p_wind_kw + p_wave_kw
     
-    # 4. Dinamik SFOC Eğrisi (Makine Yüküne Bağlı Tüketim)
-    mcr_kw = p_des_kw * 1.1 # Maksimum Sürekli Güç
+    mcr_kw = p_des_kw * 1.1 
     load = p_total_kw / mcr_kw
     if load < 0.1: load = 0.1
     
-    # %75 yükte en verimli (175 g/kWh) olan kova eğrisi parabolü
     sfoc_dyn = 175 * (1 + 0.5 * (load - 0.75)**2)
-    
-    # Günlük Yakıt (Ton)
     daily_fuel_ton = (p_total_kw * sfoc_dyn * 24) / 1000000
     return daily_fuel_ton
 
@@ -103,10 +91,14 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# [GÜNCELLENDİ] CANLI AIS SNAPSHOT FONKSİYONU (15 derece yarıçap, 5 saniye tarama)
-def get_ais_snapshot(api_key, center_lat, center_lon, radius_deg=15.0, timeout=5):
-    min_lat, max_lat = center_lat - radius_deg, center_lat + radius_deg
-    min_lon, max_lon = center_lon - radius_deg, center_lon + radius_deg
+# [GÜNCELLENDİ] TÜM ROTAYI TARAYAN VE RAM KORUMALI AIS SNAPSHOT
+def get_ais_snapshot_route(api_key, route_coords, margin_deg=3.0, timeout=5, max_vessels=1500):
+    # Rotanın enlem ve boylam sınırlarını (Bbox) buluyoruz
+    lats = [c[1] for c in route_coords]
+    lons = [c[0] for c in route_coords]
+    
+    min_lat, max_lat = min(lats) - margin_deg, max(lats) + margin_deg
+    min_lon, max_lon = min(lons) - margin_deg, max(lons) + margin_deg
     
     bounding_box = [[[min_lat, min_lon], [max_lat, max_lon]]]
     
@@ -134,6 +126,11 @@ def get_ais_snapshot(api_key, center_lat, center_lon, radius_deg=15.0, timeout=5
                     if not vname: vname = f"Unknown (MMSI: {mmsi})"
                     
                     vessels[mmsi] = {"lat": vlat, "lon": vlon, "name": vname}
+                    
+                    # RAM Koruması: Sistem kilitlenmesin diye 1500 gemide aramayı kes
+                    if len(vessels) >= max_vessels:
+                        break
+                        
             except websocket.WebSocketTimeoutException:
                 break
         ws.close()
@@ -157,7 +154,7 @@ d_cons = st.sidebar.number_input("Tasarım Tüketimi [Ton/Gün]", value=225.0)
 st.sidebar.markdown("---")
 st.sidebar.header("📡 2. Uydu & AIS Bağlantıları")
 api_key_global = st.sidebar.text_input("OpenWeather API Key:", type="password")
-ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password", help="Geniş alan canlı gemi trafiğini görmek için girin.")
+ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password", help="Tüm rota üzerindeki canlı gemi trafiğini görmek için girin.")
 
 ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 
@@ -346,15 +343,16 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         else:
             route_segments.append({'coords': route_coords, 'color': 'lime', 'bft': 3})
             
-        # CANLI GEMİLERİ ÇEKME
+        # YENİ: TÜM ROTAYI KAPSAYAN GEMİLERİ ÇEKME
         live_vessels = []
         if ais_api_key:
-            st.toast("📡 AIS Radarı geniş alan için 5 saniyeliğine aktif ediliyor...")
-            live_vessels = get_ais_snapshot(ais_api_key, dest_lat, dest_lon)
+            st.toast("📡 AIS Radarı tüm güzergah için 5 saniyeliğine aktif ediliyor...")
+            # Yeni fonksiyonu çağırıyoruz ve rotayı gönderiyoruz
+            live_vessels = get_ais_snapshot_route(ais_api_key, route_coords)
             if live_vessels:
-                st.toast(f"✅ Hedef liman etrafında {len(live_vessels)} gerçek gemi tespit edildi!")
+                st.toast(f"✅ Rota boyunca {len(live_vessels)} gerçek gemi tespit edildi!")
             else:
-                st.toast("⚠️ Liman etrafında AIS sinyali alınamadı veya zaman aşımı.")
+                st.toast("⚠️ Güzergahta AIS sinyali alınamadı veya zaman aşımı.")
         
         max_speed = d_speed
         eco_speed = max(10.0, d_speed * 0.5)
@@ -390,7 +388,7 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
             
             fig.add_trace(go.Scattergeo(
                 lon=v_lons, lat=v_lats, mode='markers',
-                marker=dict(size=6, color='blue', symbol='circle', opacity=0.7),
+                marker=dict(size=5, color='blue', symbol='circle', opacity=0.6),
                 text=v_names, hoverinfo='text', name='Canlı AIS Trafiği'
             ))
 
