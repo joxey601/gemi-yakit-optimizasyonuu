@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.3 (JIT Decision Support)")
+st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.4 (Smart JIT Dashboard)")
 st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS | **JIT Logistics**")
 st.markdown("---")
 
@@ -348,7 +348,6 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
             if live_vessels:
                 st.toast(f"✅ Rota boyunca {len(live_vessels)} gerçek gemi tespit edildi!")
                 
-                # JIT ALGORİTMASI İÇİN LİMAN YOĞUNLUĞU FİLTRESİ (30 NM Yarıçap)
                 for v in live_vessels:
                     dist_to_port = haversine_distance(dest_lat, dest_lon, v['lat'], v['lon'])
                     if dist_to_port <= 30.0:
@@ -373,12 +372,11 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         _, ai_cii_grade = calculate_cii_grade(daily_fuel, chosen_speed, dwt, ref_cii)
         _, bad_cii_grade = calculate_cii_grade(bad_daily_fuel, max_speed, dwt, ref_cii)
         
-        # --- YENİ: JIT (JUST-IN-TIME) KARAR DESTEK HESAPLAMALARI ---
-        jit_wait_hours = port_vessels_count * 2.0 # Gemi başı 2 saat bekleme/operasyon varsayımı
+        # --- JIT HESAPLAMALARI ---
+        jit_wait_hours = port_vessels_count * 2.0 
         jit_target_days = days_on_route + (jit_wait_hours / 24.0)
         jit_speed = total_distance_nm / (jit_target_days * 24)
         
-        # Minimum güvenli manevra hızı kontrolü (örn 8 knot altı tehlikeli)
         if jit_speed < 8.0: 
             jit_speed = 8.0
             
@@ -435,12 +433,20 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # YENİ JIT (JUST-IN-TIME) PANELİ
-        if ais_api_key and port_vessels_count > 0 and jit_savings > 0:
-            st.markdown("### 🧠 Yapay Zeka JIT (Just-in-Time) Karar Destek Mekanizması")
-            st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı ve demir sahası etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Eğer mevcut {chosen_speed:.1f} knot hızınızla giderseniz, geminiz tahmini **{jit_wait_hours:.0f} saat** boyunca demirde beklemek zorunda kalacak.")
-            st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Ana makine hızınızı **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir (sıfır bekleme) ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
-            st.markdown("---")
+        # --- [GÜNCELLENDİ] HER ZAMAN GÖRÜNEN JIT PANELİ ---
+        st.markdown("### 🧠 Yapay Zeka JIT (Just-in-Time) Karar Destek Mekanizması")
+        if not ais_api_key:
+            st.warning("⚠️ **Veri Bekleniyor:** Liman yoğunluğunu analiz edip hız tavsiyesi verebilmemiz için lütfen sol menüden AISStream API şifresini girin.")
+        else:
+            if port_vessels_count > 0:
+                if jit_savings > 0:
+                    st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı ve demir sahası etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Eğer mevcut {chosen_speed:.1f} knot hızınızla giderseniz, geminiz tahmini **{jit_wait_hours:.0f} saat** boyunca demirde beklemek zorunda kalacak.")
+                    st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Ana makine hızınızı **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir (sıfır bekleme) ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
+                else:
+                    st.info(f"ℹ️ {dest_port} limanında trafik var ancak mevcut hızınız ({chosen_speed:.1f} knot) zaten JIT optimizasyonu için ideal aralıkta. Ekstra hız kesmeye gerek duyulmadı.")
+            else:
+                st.success(f"✅ **LİMAN AÇIK:** AIS verilerine göre şu an {dest_port} limanında bekleyen gemi tespit edilmedi. Planlanan {chosen_speed:.1f} knot hızla limana bekleme yapmadan yanaşabilirsiniz.")
+        st.markdown("---")
 
         st.subheader("📊 Seyir ve Optimizasyon Raporu")
         c1, c2, c3 = st.columns(3)
