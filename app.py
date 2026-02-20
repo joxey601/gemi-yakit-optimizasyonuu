@@ -19,8 +19,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.2 (Full Route Radar)")
-st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS")
+st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.3 (JIT Decision Support)")
+st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS | **JIT Logistics**")
 st.markdown("---")
 
 # Session State Başlatmaları
@@ -91,9 +91,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# [GÜNCELLENDİ] TÜM ROTAYI TARAYAN VE RAM KORUMALI AIS SNAPSHOT
 def get_ais_snapshot_route(api_key, route_coords, margin_deg=3.0, timeout=5, max_vessels=1500):
-    # Rotanın enlem ve boylam sınırlarını (Bbox) buluyoruz
     lats = [c[1] for c in route_coords]
     lons = [c[0] for c in route_coords]
     
@@ -127,10 +125,8 @@ def get_ais_snapshot_route(api_key, route_coords, margin_deg=3.0, timeout=5, max
                     
                     vessels[mmsi] = {"lat": vlat, "lon": vlon, "name": vname}
                     
-                    # RAM Koruması: Sistem kilitlenmesin diye 1500 gemide aramayı kes
                     if len(vessels) >= max_vessels:
                         break
-                        
             except websocket.WebSocketTimeoutException:
                 break
         ws.close()
@@ -343,14 +339,20 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         else:
             route_segments.append({'coords': route_coords, 'color': 'lime', 'bft': 3})
             
-        # YENİ: TÜM ROTAYI KAPSAYAN GEMİLERİ ÇEKME
+        # CANLI GEMİLERİ ÇEKME
         live_vessels = []
+        port_vessels_count = 0
         if ais_api_key:
             st.toast("📡 AIS Radarı tüm güzergah için 5 saniyeliğine aktif ediliyor...")
-            # Yeni fonksiyonu çağırıyoruz ve rotayı gönderiyoruz
             live_vessels = get_ais_snapshot_route(ais_api_key, route_coords)
             if live_vessels:
                 st.toast(f"✅ Rota boyunca {len(live_vessels)} gerçek gemi tespit edildi!")
+                
+                # JIT ALGORİTMASI İÇİN LİMAN YOĞUNLUĞU FİLTRESİ (30 NM Yarıçap)
+                for v in live_vessels:
+                    dist_to_port = haversine_distance(dest_lat, dest_lon, v['lat'], v['lon'])
+                    if dist_to_port <= 30.0:
+                        port_vessels_count += 1
             else:
                 st.toast("⚠️ Güzergahta AIS sinyali alınamadı veya zaman aşımı.")
         
@@ -370,6 +372,19 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         
         _, ai_cii_grade = calculate_cii_grade(daily_fuel, chosen_speed, dwt, ref_cii)
         _, bad_cii_grade = calculate_cii_grade(bad_daily_fuel, max_speed, dwt, ref_cii)
+        
+        # --- YENİ: JIT (JUST-IN-TIME) KARAR DESTEK HESAPLAMALARI ---
+        jit_wait_hours = port_vessels_count * 2.0 # Gemi başı 2 saat bekleme/operasyon varsayımı
+        jit_target_days = days_on_route + (jit_wait_hours / 24.0)
+        jit_speed = total_distance_nm / (jit_target_days * 24)
+        
+        # Minimum güvenli manevra hızı kontrolü (örn 8 knot altı tehlikeli)
+        if jit_speed < 8.0: 
+            jit_speed = 8.0
+            
+        jit_daily_fuel = calculate_instant_fuel(jit_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
+        jit_total_fuel = jit_daily_fuel * (total_distance_nm / (jit_speed * 24))
+        jit_savings = total_fuel - jit_total_fuel
         
         fig = go.Figure()
 
@@ -419,6 +434,13 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
             margin=dict(l=0, r=0, t=40, b=0)
         )
         st.plotly_chart(fig, use_container_width=True)
+        
+        # YENİ JIT (JUST-IN-TIME) PANELİ
+        if ais_api_key and port_vessels_count > 0 and jit_savings > 0:
+            st.markdown("### 🧠 Yapay Zeka JIT (Just-in-Time) Karar Destek Mekanizması")
+            st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı ve demir sahası etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Eğer mevcut {chosen_speed:.1f} knot hızınızla giderseniz, geminiz tahmini **{jit_wait_hours:.0f} saat** boyunca demirde beklemek zorunda kalacak.")
+            st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Ana makine hızınızı **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir (sıfır bekleme) ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
+            st.markdown("---")
 
         st.subheader("📊 Seyir ve Optimizasyon Raporu")
         c1, c2, c3 = st.columns(3)
