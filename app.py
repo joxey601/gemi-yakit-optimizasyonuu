@@ -12,6 +12,11 @@ import searoute as sr
 import websocket
 import json
 
+# --- YENİ EKLENEN MAKİNE ÖĞRENMESİ KÜTÜPHANELERİ ---
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+
 # --- SAYFA AYARLARI ---
 st.set_page_config(
     page_title="Gemi Yakıt & CII Optimizasyonu",
@@ -19,13 +24,15 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.6 (Dynamic JIT)")
-st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS | **Port Operations**")
+st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.7 (Scikit-Learn AI)")
+st.markdown("**Modüller:** Computer Vision | Big Data | **Machine Learning** | Live Satellite | Geospatial Routing | Real-Time AIS | JIT Logistics")
 st.markdown("---")
 
 # Session State Başlatmaları
 if 'calc_wind_area' not in st.session_state:
     st.session_state.calc_wind_area = 800.0
+if 'ai_model' not in st.session_state:
+    st.session_state.ai_model = None
 
 # =============================================================================
 # BÖLÜM 1: AKADEMİK FİZİK MOTORU (ISO 15016 & ITTC)
@@ -45,7 +52,6 @@ def get_live_weather_by_coords(lat, lon, api_key):
 def calculate_instant_fuel(speed, draft, wind_area, beaufort, des_spd, des_dft, des_cons, beam):
     v_ship_ms = speed * 0.5144
     p_des_kw = (des_cons * 1000000) / (24 * 175) 
-    
     p_calm_kw = p_des_kw * ((speed / des_spd)**3) * ((draft / des_dft)**(2/3))
     
     wind_speed_ms = 0.836 * (beaufort ** 1.5)
@@ -122,23 +128,19 @@ def get_ais_snapshot_route(api_key, route_coords, margin_deg=3.0, timeout=5, max
                     vlon = msg["Message"]["PositionReport"]["Longitude"]
                     vname = msg["MetaData"]["ShipName"].strip()
                     if not vname: vname = f"Unknown (MMSI: {mmsi})"
-                    
                     vessels[mmsi] = {"lat": vlat, "lon": vlon, "name": vname}
-                    
-                    if len(vessels) >= max_vessels:
-                        break
+                    if len(vessels) >= max_vessels: break
             except websocket.WebSocketTimeoutException:
                 break
         ws.close()
     except Exception as e:
         pass 
-        
     return list(vessels.values())
 
 # =============================================================================
 # BÖLÜM 2: GİRDİLER (SIDEBAR)
 # =============================================================================
-st.sidebar.success("✅ ISO 15016 & ITTC Physics Engine Active")
+st.sidebar.success("✅ ISO 15016 Physics & Sklearn ML Active")
 st.sidebar.header("⚙️ 1. Gemi Tasarım Bilgileri")
 ship_type = st.sidebar.text_input("Gemi Tipi", value="Container 8000TEU")
 dwt = st.sidebar.number_input("Deadweight (DWT) [Ton]", value=105000.0)
@@ -150,13 +152,12 @@ d_cons = st.sidebar.number_input("Tasarım Tüketimi [Ton/Gün]", value=225.0)
 st.sidebar.markdown("---")
 st.sidebar.header("📡 2. Uydu & AIS Bağlantıları")
 api_key_global = st.sidebar.text_input("OpenWeather API Key:", type="password")
-ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password", help="Tüm rota üzerindeki canlı gemi trafiğini görmek için girin.")
+ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password")
 
-# --- YENİ EKLENEN LİMAN OPERASYON BÖLÜMÜ ---
 st.sidebar.markdown("---")
 st.sidebar.header("🏗️ 3. Liman Operasyon Verileri")
-port_handling_time = st.sidebar.number_input("Ortalama Elleçleme (Saat/Gemi)", value=12.0, step=1.0, help="Varış limanında bir geminin ortalama yükleme/boşaltma süresi.")
-port_terminals = st.sidebar.number_input("Aktif Rıhtım Sayısı", value=3, min_value=1, step=1, help="Limanda aynı anda işlem görebilecek maksimum gemi sayısı.")
+port_handling_time = st.sidebar.number_input("Ortalama Elleçleme (Saat/Gemi)", value=12.0, step=1.0)
+port_terminals = st.sidebar.number_input("Aktif Rıhtım Sayısı", value=3, min_value=1, step=1)
 
 ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 
@@ -164,8 +165,6 @@ ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 # BÖLÜM 3: OPENCV RÜZGAR ALANI HESAPLAYICI
 # =============================================================================
 st.header("📷 Rüzgar Alanı Analizi (OpenCV)")
-st.write("Geminin ön cephe fotoğrafını yükleyerek aerodinamik dirence (ISO 15016) maruz kalan alanı hesaplayın.")
-
 with st.expander("Geminin Transvers (Ön) Cephe Fotoğrafını Yükle", expanded=False):
     col_cv1, col_cv2 = st.columns(2)
     uploaded_file = col_cv1.file_uploader("Gemi Fotoğrafı", type=['png', 'jpg', 'jpeg'])
@@ -173,26 +172,20 @@ with st.expander("Geminin Transvers (Ön) Cephe Fotoğrafını Yükle", expanded
     if uploaded_file is not None:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, 1)
-        
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
-        
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if contours:
             c = max(contours, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(c)
-            
             img_result = img.copy()
             cv2.rectangle(img_result, (x, y), (x+w, y+h), (0, 255, 0), 3)
-            
             pixel_area = cv2.contourArea(c)
             if pixel_area == 0: pixel_area = w * h * 0.7 
-            
             scale = beam / float(w) if w > 0 else 0
             real_area = pixel_area * (scale ** 2)
             st.session_state.calc_wind_area = float(real_area)
-            
             img_rgb = cv2.cvtColor(img_result, cv2.COLOR_BGR2RGB)
             col_cv1.image(img_rgb, caption="OpenCV Kontur ve Bounding Box")
             col_cv2.success(f"✅ Gemi Genişliği (Beam): {beam} m\n\n🌬️ **Hesaplanan Transvers Rüzgar Alanı:** {real_area:.1f} m²")
@@ -205,7 +198,7 @@ with st.expander("Geminin Transvers (Ön) Cephe Fotoğrafını Yükle", expanded
 st.markdown("---")
 
 # =============================================================================
-# BÖLÜM 4: BÜYÜK VERİ SİMÜLASYONU VE CII KARNESİ 
+# BÖLÜM 4: BÜYÜK VERİ ÜRETİMİ (BIG DATA)
 # =============================================================================
 st.header("🔄 Büyük Veri Simülasyonu & Çevresel Regülasyon (CII)")
 
@@ -213,7 +206,7 @@ with st.expander("📊 Sanal Sefer Verisi Üret ve Analiz Et", expanded=False):
     col_sim1, col_sim2 = st.columns([1, 2])
     
     with col_sim1:
-        sim_days = st.number_input("Simüle Edilecek Gün Sayısı:", min_value=10, max_value=10000, value=365, step=10)
+        sim_days = st.number_input("Simüle Edilecek Gün Sayısı (ML Eğitimi İçin):", min_value=10, max_value=20000, value=1000, step=100)
         sim_wind_area = st.number_input("Gemi Rüzgar Alanı (m²):", value=float(st.session_state.calc_wind_area))
         
         if st.button("🚀 Veri Setini Üret"):
@@ -233,62 +226,87 @@ with st.expander("📊 Sanal Sefer Verisi Üret ve Analiz Et", expanded=False):
                     sim_grades.append(grade)
                     
                 st.session_state.df_sim = pd.DataFrame({
-                    "Gün": range(1, sim_days + 1), "Hız (Knot)": np.round(sim_speeds, 1),
-                    "Draft (m)": np.round(sim_drafts, 1), "Beaufort": sim_bfts,
-                    "Günlük Yakıt (Ton)": np.round(sim_fuels, 1), "CII Değeri": np.round(sim_ciis, 2), "IMO Karne": sim_grades
+                    "Hız (Knot)": np.round(sim_speeds, 1),
+                    "Draft (m)": np.round(sim_drafts, 1), 
+                    "Beaufort": sim_bfts,
+                    "Günlük Yakıt (Ton)": np.round(sim_fuels, 1), 
+                    "CII Değeri": np.round(sim_ciis, 2), 
+                    "IMO Karne": sim_grades
                 })
                 st.success(f"✅ {sim_days} günlük devasa veri seti başarıyla üretildi!")
 
     with col_sim2:
         if 'df_sim' in st.session_state:
             st.dataframe(st.session_state.df_sim.head(10), use_container_width=True)
-            
-    if 'df_sim' in st.session_state:
-        st.markdown("#### 📈 Karbon Emisyonu (CII) Sınıflarına Göre Yakıt Dağılımı")
-        fig_scatter = go.Figure()
-        colors = {'A': '#27ae60', 'B': '#2ecc71', 'C': '#f1c40f', 'D': '#e67e22', 'E': '#c0392b'}
-        
-        for grade in ['A', 'B', 'C', 'D', 'E']:
-            df_sub = st.session_state.df_sim[st.session_state.df_sim['IMO Karne'] == grade]
-            if not df_sub.empty:
-                fig_scatter.add_trace(go.Scatter(
-                    x=df_sub['Hız (Knot)'], y=df_sub['Günlük Yakıt (Ton)'],
-                    mode='markers', name=f'Sınıf {grade}',
-                    marker=dict(color=colors[grade], size=8, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')),
-                    text=df_sub['Beaufort'], hovertemplate="Hız: %{x} Kn<br>Yakıt: %{y} Ton<br>Beaufort: %{text}"
-                ))
-                
-        fig_scatter.update_layout(
-            title='Hız ve Yakıt Tüketimi', 
-            xaxis_title='Gemi Hızı (Knot)', 
-            yaxis_title='Günlük Yakıt Tüketimi (Ton)', 
-            height=500,
-            dragmode='pan'
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True, config={'scrollZoom': True})
-
-        avg_fuel_sim = st.session_state.df_sim['Günlük Yakıt (Ton)'].mean()
-        avg_speed_sim = st.session_state.df_sim['Hız (Knot)'].mean()
-        total_fuel_sim = st.session_state.df_sim['Günlük Yakıt (Ton)'].sum()
-        
-        overall_cii, overall_grade = calculate_cii_grade(avg_fuel_sim, avg_speed_sim, dwt, ref_cii)
-        g_color = colors.get(overall_grade, '#95a5a6') 
-        
-        c_gen1, c_gen2, c_gen3 = st.columns(3)
-        c_gen1.metric("Simüle Edilen Gün", f"{len(st.session_state.df_sim)} Gün")
-        c_gen2.metric("Toplam Harcanan Yakıt", f"{total_fuel_sim:,.0f} Ton")
-        c_gen3.markdown(f"""
-        <div style="background-color: {g_color}; padding: 15px; border-radius: 10px; text-align: center;">
-            <h4 style="margin: 0; color: white;">GENEL IMO KARNESİ</h4>
-            <h1 style="margin: 0; color: white; font-size: 40px;">{overall_grade}</h1>
-            <p style="margin: 0; color: white;">Ortalama CII: {overall_cii:.2f}</p>
-        </div>
-        """, unsafe_allow_html=True)
 
 st.markdown("---")
 
 # =============================================================================
-# BÖLÜM 5: GLOBAL NAVİGASYON VE CANLI TRAFİK
+# BÖLÜM 5: SCIKIT-LEARN MAKİNE ÖĞRENMESİ (YENİ)
+# =============================================================================
+st.header("🤖 Makine Öğrenmesi ile Yakıt Tüketimi Öğrenimi (Scikit-Learn)")
+
+if 'df_sim' not in st.session_state:
+    st.warning("⚠️ Makine öğrenmesi modelini eğitebilmek için önce yukarıdan 'Veri Setini Üret' butonuna basarak sanal okyanus verisi oluşturmalısın.")
+else:
+    col_ml1, col_ml2 = st.columns([1, 1])
+    
+    with col_ml1:
+        st.markdown("""
+        **Model Eğitimi (Random Forest Regressor)**
+        Sistem, simüle edilen binlerce günlük veriyi analiz ederek geminin hidrodinamik ve aerodinamik karakteristiğini ezberler.
+        """)
+        if st.button("🧠 Yapay Zekayı Eğit"):
+            with st.spinner("Model eğitiliyor, ağırlıklar hesaplanıyor..."):
+                df = st.session_state.df_sim
+                
+                # Bağımsız değişkenler (X) ve Bağımlı değişken (y)
+                X = df[['Hız (Knot)', 'Draft (m)', 'Beaufort']]
+                y = df['Günlük Yakıt (Ton)']
+                
+                # Veriyi Test ve Eğitim olarak ikiye bölme (%80 Eğitim, %20 Test)
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                
+                # Random Forest Modelini Kurma
+                rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+                rf_model.fit(X_train, y_train)
+                
+                # Test verisi ile modelin başarısını ölçme
+                y_pred = rf_model.predict(X_test)
+                mae = mean_absolute_error(y_test, y_pred)
+                r2 = r2_score(y_test, y_pred)
+                
+                # Modeli Session State'e kaydet
+                st.session_state.ai_model = rf_model
+                st.session_state.ml_metrics = {"mae": mae, "r2": r2}
+                
+                st.success("✅ Model başarıyla eğitildi!")
+                
+    with col_ml2:
+        if st.session_state.ai_model is not None:
+            st.info(f"**📊 Model Başarı Metrikleri (Sınav Sonucu)**\n\n"
+                    f"**R² Skoru (Doğruluk Oranı):** %{st.session_state.ml_metrics['r2'] * 100:.2f}\n\n"
+                    f"**Hata Payı (MAE):** ±{st.session_state.ml_metrics['mae']:.2f} Ton/Gün")
+            
+            st.markdown("#### 🔮 Canlı Yakıt Tahmini Testi")
+            test_speed = st.slider("Hız Seç:", min_value=5.0, max_value=d_speed, value=18.0)
+            test_draft = st.slider("Draft Seç:", min_value=5.0, max_value=d_draft, value=12.0)
+            test_bft = st.slider("Hava Durumu (Beaufort):", min_value=0, max_value=12, value=4)
+            
+            if st.button("Modelden Tahmin İste"):
+                input_data = pd.DataFrame({'Hız (Knot)': [test_speed], 'Draft (m)': [test_draft], 'Beaufort': [test_bft]})
+                ai_prediction = st.session_state.ai_model.predict(input_data)[0]
+                
+                # Formülle hesaplanan gerçek değeri de bulup karşılaştıralım
+                physics_value = calculate_instant_fuel(test_speed, test_draft, st.session_state.calc_wind_area, test_bft, d_speed, d_draft, d_cons, beam)
+                
+                st.success(f"🤖 **Yapay Zeka Tahmini:** {ai_prediction:.1f} Ton/Gün")
+                st.markdown(f"*Fizik Formülüyle Hesaplanan:* {physics_value:.1f} Ton/Gün")
+
+st.markdown("---")
+
+# =============================================================================
+# BÖLÜM 6: GLOBAL NAVİGASYON VE CANLI TRAFİK
 # =============================================================================
 st.header("🗺️ Global Navigasyon & Canlı AIS Trafiği")
 
@@ -339,13 +357,11 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
                 lon_s, lat_s = segment_coords[0]
                 _, bft = get_live_weather_by_coords(lat_s, lon_s, api_key_global)
                 if bft is None: bft = 3
-                
                 bft_sum += bft
                 valid_samples += 1
                 seg_color = 'red' if bft >= 6 else 'lime'
                 route_segments.append({'coords': segment_coords, 'color': seg_color, 'bft': bft})
                 my_bar.progress(min(1.0, (idx + 1) / num_samples)) 
-                
             if valid_samples > 0: avg_bft = round(bft_sum / valid_samples)
             my_bar.empty()
         else:
@@ -354,17 +370,14 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         live_vessels = []
         port_vessels_count = 0
         if ais_api_key:
-            st.toast("📡 AIS Radarı tüm güzergah için 5 saniyeliğine aktif ediliyor...")
+            st.toast("📡 AIS Radarı tüm güzergah için aktif ediliyor...")
             live_vessels = get_ais_snapshot_route(ais_api_key, route_coords)
             if live_vessels:
                 st.toast(f"✅ Rota boyunca {len(live_vessels)} gerçek gemi tespit edildi!")
-                
                 for v in live_vessels:
                     dist_to_port = haversine_distance(dest_lat, dest_lon, v['lat'], v['lon'])
                     if dist_to_port <= 30.0:
                         port_vessels_count += 1
-            else:
-                st.toast("⚠️ Güzergahta AIS sinyali alınamadı veya zaman aşımı.")
         
         max_speed = d_speed
         eco_speed = max(10.0, d_speed * 0.5)
@@ -372,28 +385,39 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         
         w_area = st.session_state.calc_wind_area
         
-        daily_fuel = calculate_instant_fuel(chosen_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
+        # --- ML MODELİ AKTİF Mİ KONTROLÜ ---
+        if st.session_state.ai_model is not None:
+            st.toast("🤖 Yapay Zeka modeli aktif! Yakıt hesaplamaları makine öğrenmesi ile yapılıyor.")
+            input_df = pd.DataFrame({'Hız (Knot)': [chosen_speed], 'Draft (m)': [d_draft], 'Beaufort': [avg_bft]})
+            daily_fuel = st.session_state.ai_model.predict(input_df)[0]
+            
+            bad_input_df = pd.DataFrame({'Hız (Knot)': [max_speed], 'Draft (m)': [d_draft], 'Beaufort': [avg_bft]})
+            bad_daily_fuel = st.session_state.ai_model.predict(bad_input_df)[0]
+        else:
+            daily_fuel = calculate_instant_fuel(chosen_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
+            bad_daily_fuel = calculate_instant_fuel(max_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
+            
         days_on_route = total_distance_nm / (chosen_speed * 24)
         total_fuel = daily_fuel * days_on_route
 
-        bad_daily_fuel = calculate_instant_fuel(max_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
         bad_days = total_distance_nm / (max_speed * 24)
         bad_total_fuel = bad_daily_fuel * bad_days
         
         _, ai_cii_grade = calculate_cii_grade(daily_fuel, chosen_speed, dwt, ref_cii)
         _, bad_cii_grade = calculate_cii_grade(bad_daily_fuel, max_speed, dwt, ref_cii)
         
-        # --- YENİ EKLENEN KUYRUK TEORİSİ MATEMATİĞİ (DİNAMİK JIT) ---
-        # Bekleme Süresi = (Limandaki Gemi Sayısı * Elleçleme Süresi) / Rıhtım Sayısı
         jit_wait_hours = (port_vessels_count * port_handling_time) / port_terminals
-        
         jit_target_days = days_on_route + (jit_wait_hours / 24.0)
         jit_speed = total_distance_nm / (jit_target_days * 24)
         
-        if jit_speed < 8.0: 
-            jit_speed = 8.0
+        if jit_speed < 8.0: jit_speed = 8.0
             
-        jit_daily_fuel = calculate_instant_fuel(jit_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
+        if st.session_state.ai_model is not None:
+            jit_input_df = pd.DataFrame({'Hız (Knot)': [jit_speed], 'Draft (m)': [d_draft], 'Beaufort': [avg_bft]})
+            jit_daily_fuel = st.session_state.ai_model.predict(jit_input_df)[0]
+        else:
+            jit_daily_fuel = calculate_instant_fuel(jit_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
+            
         jit_total_fuel = jit_daily_fuel * (total_distance_nm / (jit_speed * 24))
         jit_savings = total_fuel - jit_total_fuel
         
@@ -425,25 +449,9 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
             title_text=f'Gerçek Deniz Yolu Navigasyonu (Ortalama Hava: {avg_bft} Bft)',
             showlegend=True,
             dragmode='pan',
-            legend=dict(
-                orientation="h", 
-                yanchor="top",
-                y=-0.05,         
-                xanchor="center",
-                x=0.5
-            ),
-            geo=dict(
-                showland=True, 
-                landcolor="rgb(243, 243, 243)", 
-                showocean=True, 
-                oceancolor="rgb(204, 229, 255)", 
-                showcountries=True, 
-                countrycolor="rgb(204, 204, 204)", 
-                projection_type="equirectangular",
-                fitbounds="locations" 
-            ),
-            height=500, 
-            margin=dict(l=0, r=0, t=40, b=0)
+            legend=dict(orientation="h", yanchor="top", y=-0.05, xanchor="center", x=0.5),
+            geo=dict(showland=True, landcolor="rgb(243, 243, 243)", showocean=True, oceancolor="rgb(204, 229, 255)", showcountries=True, countrycolor="rgb(204, 204, 204)", projection_type="equirectangular", fitbounds="locations"),
+            height=500, margin=dict(l=0, r=0, t=40, b=0)
         )
         
         st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
@@ -454,40 +462,20 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         else:
             if port_vessels_count > 0:
                 if jit_savings > 0:
-                    st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı ve demir sahası etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Belirlediğiniz operasyon verilerine (gemi başı {port_handling_time} saat ve {port_terminals} rıhtım) göre tahmini bekleme süreniz **{jit_wait_hours:.0f} saat** olacaktır.")
-                    st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Ana makine hızınızı uygulanan {chosen_speed:.1f} knot hızından **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir (sıfır bekleme) ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
+                    st.error(f"⚠️ **DİKKAT LİMAN YOĞUNLUĞU:** {dest_port} limanı etrafında şu an **{port_vessels_count} adet gemi** tespit edildi. Tahmini bekleme süreniz **{jit_wait_hours:.0f} saat** olacaktır.")
+                    st.success(f"💡 **AI KAPTAN TAVSİYESİ:** Hızınızı **{jit_speed:.1f} knot**'a düşürün. Limana {jit_wait_hours:.0f} saat geç vararak doğrudan iskeleye yanaşabilir ve toplamda **{jit_savings:,.0f} Ton fazladan yakıt tasarrufu** sağlayabilirsiniz!")
                 else:
-                    st.info(f"ℹ️ {dest_port} limanında trafik var ancak uygulanan hızınız ({chosen_speed:.1f} knot) JIT optimizasyonu için ideal aralıkta. Ekstra hız kesmeye gerek duyulmadı.")
+                    st.info(f"ℹ️ {dest_port} limanında trafik var ancak uygulanan hızınız ({chosen_speed:.1f} knot) JIT optimizasyonu için ideal aralıkta.")
             else:
-                st.success(f"✅ **LİMAN AÇIK:** AIS verilerine göre şu an {dest_port} limanında bekleyen gemi tespit edilmedi. Uygulanan {chosen_speed:.1f} knot hızla limana bekleme yapmadan yanaşabilirsiniz.")
+                st.success(f"✅ **LİMAN AÇIK:** AIS verilerine göre şu an {dest_port} limanında bekleyen gemi tespit edilmedi.")
         st.markdown("---")
 
         st.subheader("📊 Seyir ve Optimizasyon Raporu")
         c1, c2, c3 = st.columns(3)
         c1.info(f"📏 **Toplam Deniz Mesafesi:** {total_distance_nm:,.0f} Nm\n\n🌬️ **Okyanus Ortalaması:** {avg_bft} Beaufort")
-        c2.success(f"⛽ **Yapay Zeka Tüketimi:** {total_fuel:,.0f} Ton\n\n⏱️ **Varış Süresi:** {days_on_route:,.1f} Gün\n\n🚀 **Uygulanan Hız:** {chosen_speed:.1f} Knot\n\n🏆 **Sefer CII Karnesi:** Sınıf {ai_cii_grade}")
+        c2.success(f"⛽ **Hesaplanan Tüketim:** {total_fuel:,.0f} Ton\n\n⏱️ **Varış Süresi:** {days_on_route:,.1f} Gün\n\n🚀 **Uygulanan Hız:** {chosen_speed:.1f} Knot\n\n🏆 **Sefer CII Karnesi:** Sınıf {ai_cii_grade}")
         
         if total_fuel < bad_total_fuel:
             c3.warning(f"⚠️ **Tam Yol Gitseydiniz:**\n\n⛽ Tüketim: {bad_total_fuel:,.0f} Ton\n⏱️ Süre: {bad_days:,.1f} Gün\n\n📉 **Kötü Senaryo CII Karnesi:** Sınıf {bad_cii_grade}")
         else:
-            c3.success(f"✨ Maksimum hız önceliği seçtiniz. Gemi tasarruf yapmadan hedefe en kısa sürede ulaşıyor.\n\n🏆 **Sefer CII Karnesi:** Sınıf {ai_cii_grade}")
-
-        st.markdown("---")
-        st.subheader("📈 Optimizasyon Grafikleri")
-        col_g1, col_g2 = st.columns(2)
-
-        fig_bar = go.Figure(data=[go.Bar(name='Yakıt Tüketimi (Ton)', x=['Maksimum Hız', 'AI Optimize Seçim'], y=[bad_total_fuel, total_fuel], text=[f"{bad_total_fuel:,.0f} Ton", f"{total_fuel:,.0f} Ton"], textposition='auto', marker_color=['#e74c3c', '#2ecc71'])])
-        fig_bar.update_layout(title='Sefer Bazlı Yakıt Karşılaştırması', yaxis_title='Toplam Yakıt (Ton)', height=400)
-        col_g1.plotly_chart(fig_bar, use_container_width=True)
-
-        speeds_array = np.linspace(eco_speed, max_speed, 20)
-        fuels_array = [calculate_instant_fuel(s, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam) * (total_distance_nm / (s * 24)) for s in speeds_array]
-            
-        fig_curve = go.Figure()
-        fig_curve.add_trace(go.Scatter(x=speeds_array, y=fuels_array, mode='lines', name='Hız-Yakıt Karakteristiği', line=dict(color='#3498db', width=3)))
-        fig_curve.add_trace(go.Scatter(x=[max_speed], y=[bad_total_fuel], mode='markers+text', name='Geleneksel Seyir', marker=dict(color='#e74c3c', size=12, symbol='x'), text=['❌ Tam Yol'], textposition='top right'))
-        fig_curve.add_trace(go.Scatter(x=[chosen_speed], y=[total_fuel], mode='markers+text', name='AI Optimizasyonu', marker=dict(color='#2ecc71', size=14), text=['✅ AI Seçimi'], textposition='bottom right'))
-        fig_curve.add_trace(go.Scatter(x=[chosen_speed, chosen_speed, max_speed], y=[total_fuel, bad_total_fuel, bad_total_fuel], mode='lines', line=dict(color='gray', width=2, dash='dash'), showlegend=False))
-        fig_curve.add_annotation(x=(chosen_speed + max_speed)/2, y=bad_total_fuel, text=f"Tasarruf: {bad_total_fuel - total_fuel:,.0f} Ton", showarrow=True, arrowhead=2, ax=0, ay=-30, font=dict(color="green", size=13))
-        fig_curve.update_layout(title='Yapay Zeka Dinamik Hız Optimizasyonu', xaxis_title='Gemi Hızı (Knot)', yaxis_title='Toplam Sefer Yakıtı (Ton)', height=400, dragmode='pan')
-        col_g2.plotly_chart(fig_curve, use_container_width=True, config={'scrollZoom': True})
+            c3.success(f"✨ Maksimum hız önceliği seçtiniz. Gemi tasarruf yapmadan hedefe en kısa sürede ulaşıyor.")
