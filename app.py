@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.0 (Academic Edition)")
+st.title("🚢 Gemi Performans ve Yakıt Simülatörü V8.1 (Academic & Extended Radar)")
 st.markdown("**Modüller:** Computer Vision | Big Data & CII | Live Satellite | Geospatial Routing | Storm Radar | Real-Time AIS")
 st.markdown("---")
 
@@ -28,7 +28,7 @@ if 'calc_wind_area' not in st.session_state:
     st.session_state.calc_wind_area = 800.0
 
 # =============================================================================
-# BÖLÜM 1: AKADEMİK FİZİK MOTORU (YENİ - ISO 15016 & ITTC)
+# BÖLÜM 1: AKADEMİK FİZİK MOTORU (ISO 15016 & ITTC)
 # =============================================================================
 
 def get_live_weather_by_coords(lat, lon, api_key):
@@ -103,8 +103,8 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# CANLI AIS SNAPSHOT FONKSİYONU
-def get_ais_snapshot(api_key, center_lat, center_lon, radius_deg=1.5, timeout=3):
+# [GÜNCELLENDİ] CANLI AIS SNAPSHOT FONKSİYONU (15 derece yarıçap, 5 saniye tarama)
+def get_ais_snapshot(api_key, center_lat, center_lon, radius_deg=15.0, timeout=5):
     min_lat, max_lat = center_lat - radius_deg, center_lat + radius_deg
     min_lon, max_lon = center_lon - radius_deg, center_lon + radius_deg
     
@@ -157,7 +157,7 @@ d_cons = st.sidebar.number_input("Tasarım Tüketimi [Ton/Gün]", value=225.0)
 st.sidebar.markdown("---")
 st.sidebar.header("📡 2. Uydu & AIS Bağlantıları")
 api_key_global = st.sidebar.text_input("OpenWeather API Key:", type="password")
-ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password", help="Varış limanındaki canlı gemi trafiğini görmek için girin.")
+ais_api_key = st.sidebar.text_input("AISStream.io API Key:", type="password", help="Geniş alan canlı gemi trafiğini görmek için girin.")
 
 ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 
@@ -349,7 +349,7 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         # CANLI GEMİLERİ ÇEKME
         live_vessels = []
         if ais_api_key:
-            st.toast("📡 AIS Radarı 3 saniyeliğine aktif ediliyor...")
+            st.toast("📡 AIS Radarı geniş alan için 5 saniyeliğine aktif ediliyor...")
             live_vessels = get_ais_snapshot(ais_api_key, dest_lat, dest_lon)
             if live_vessels:
                 st.toast(f"✅ Hedef liman etrafında {len(live_vessels)} gerçek gemi tespit edildi!")
@@ -362,7 +362,6 @@ if st.button("📡 Kusursuz Okyanus Rotasını Çiz ve Analiz Et"):
         
         w_area = st.session_state.calc_wind_area
         
-        # YENİ FİZİK MOTORU ÇAĞRILARI (beam parametresi eklendi)
         daily_fuel = calculate_instant_fuel(chosen_speed, d_draft, w_area, avg_bft, d_speed, d_draft, d_cons, beam)
         days_on_route = total_distance_nm / (chosen_speed * 24)
         total_fuel = daily_fuel * days_on_route
