@@ -8,3 +8,5 @@ requests
 plotly
 searoute
 websocket-client
+shap
+fpdf
