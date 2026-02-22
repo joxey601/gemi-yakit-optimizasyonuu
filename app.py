@@ -22,9 +22,9 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V10.0", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.0 (Master Edition)")
-st.markdown("**Modules:** Computer Vision | Big Data | Explainable AI (SHAP) | 3D Nav & Weather Routing | JIT | Total OPEX | PDF Export")
+st.set_page_config(page_title="Vessel AI & CII Optimizer V10.1", page_icon="🚢", layout="wide")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.1 (Master Edition)")
+st.markdown("**Modules:** Computer Vision | Big Data | Explainable AI (SHAP) | 2D Nav & Weather Routing | JIT | Total OPEX | PDF Export")
 st.markdown("---")
 
 if 'calc_wind_area' not in st.session_state: st.session_state.calc_wind_area = 800.0
@@ -109,7 +109,8 @@ def create_pdf(report_data):
     pdf.ln(10)
     for key, val in report_data.items():
         pdf.set_font("Arial", 'B', 11)
-        pdf.cell(50, 8, txt=str(key)+":", ln=False)
+        # BURASI DÜZELTİLDİ: Genişlik 50'den 80'e çıkarıldı, iç içe geçme sorunu çözüldü.
+        pdf.cell(80, 8, txt=str(key)+":", ln=False)
         pdf.set_font("Arial", '', 11)
         pdf.cell(100, 8, txt=str(val), ln=True)
     return pdf.output(dest='S').encode('latin-1')
@@ -145,7 +146,7 @@ ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 # =============================================================================
 # MAIN TABS UI
 # =============================================================================
-tab1, tab2, tab3, tab4 = st.tabs(["📷 CV Wind Area", "🧠 Explainable AI Training", "🗺️ 3D OPEX & Nav", "📑 Captain's Orders"])
+tab1, tab2, tab3, tab4 = st.tabs(["📷 CV Wind Area", "🧠 Explainable AI Training", "🗺️ 2D OPEX & Nav", "📑 Captain's Orders"])
 
 # --- TAB 1: COMPUTER VISION ---
 with tab1:
@@ -198,9 +199,9 @@ with tab2:
             shap.summary_plot(shap_values, st.session_state.df_sim, plot_type="bar", show=False)
             st.pyplot(fig_shap)
 
-# --- TAB 3: 3D NAVIGATION & OPEX ---
+# --- TAB 3: 2D NAVIGATION & OPEX ---
 with tab3:
-    st.subheader("🌍 3D Global Navigation & Total OPEX Simulator")
+    st.subheader("🌍 2D Global Navigation & Total OPEX Simulator")
     ports = {"Tokyo": (35.6, 139.6), "Shanghai": (31.2, 121.5), "Singapore": (1.3, 103.8), "Rotterdam": (51.9, 4.4), "Istanbul": (41.0, 28.9), "Panama": (9.1, -79.6), "New York": (40.7, -74.0)}
     cn1, cn2, cn3, cn4 = st.columns(4)
     c_lat, c_lon = cn1.number_input("Lat:", value=35.0), cn2.number_input("Lon:", value=15.0)
@@ -253,7 +254,6 @@ with tab3:
 
             f_norm = get_f(norm_v) * norm_days
             f_jit = get_f(jit_v) * (dist_nm / (jit_v * 24))
-            f_bad = get_f(max_v) * (dist_nm / (max_v * 24))
             
             # --- OPEX LOGIC ---
             def calc_opex(fuel, days):
@@ -262,16 +262,24 @@ with tab3:
             opex_norm = calc_opex(f_norm, norm_days) + (wait_hrs * (daily_charter/24))
             opex_jit = calc_opex(f_jit, dist_nm/(jit_v*24)) 
             
-            # --- 3D GLOBE MAP ---
+            # --- 2D FLAT MAP (GERİ DÖNDÜRÜLDÜ) ---
             fig_map = go.Figure()
             for s in segments:
                 fig_map.add_trace(go.Scattergeo(lon=[c[0] for c in s['c']], lat=[c[1] for c in s['c']], mode='lines', line=dict(width=4, color=s['color'])))
             if live_ships:
-                fig_map.add_trace(go.Scattergeo(lon=[v['lon'] for v in live_ships], lat=[v['lat'] for v in live_ships], mode='markers', marker=dict(size=4, color='cyan')))
+                fig_map.add_trace(go.Scattergeo(lon=[v['lon'] for v in live_ships], lat=[v['lat'] for v in live_ships], mode='markers', marker=dict(size=4, color='blue')))
             
             fig_map.update_layout(
-                geo=dict(projection_type="orthographic", showocean=True, oceancolor="#1e272e", showland=True, landcolor="#485460", bgcolor="#2f3640"),
-                margin=dict(l=0,r=0,t=0,b=0), height=500, paper_bgcolor="#2f3640"
+                dragmode='pan',
+                geo=dict(
+                    projection_type="equirectangular", 
+                    showland=True, 
+                    landcolor="#f0f0f0", 
+                    showocean=True, 
+                    oceancolor="#cce5ff"
+                ),
+                height=600, 
+                margin=dict(l=0, r=0, t=0, b=0)
             )
             st.plotly_chart(fig_map, use_container_width=True)
 
@@ -303,4 +311,4 @@ with tab4:
         pdf_bytes = create_pdf(st.session_state.voyage_report)
         st.download_button(label="📥 Download PDF Voyage Order", data=pdf_bytes, file_name="AI_Voyage_Order.pdf", mime="application/pdf")
     else:
-        st.warning("⚠️ Please run the Route Analysis in the 3D OPEX tab first to generate the report.")
+        st.warning("⚠️ Please run the Route Analysis in the 2D OPEX tab first to generate the report.")
