@@ -22,7 +22,6 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V11.6", page_icon="🚢", layout="wide")
 st.title("🚢 Ultimate Digital Twin & OPEX Simulator")
 st.markdown("**Modules:** Computer Vision | 5D Explainable AI | Nav & ECA | JIT OPEX | **Live Engine Telemetry** | **Fleet Database** | PDF Export")
 st.markdown("---")
@@ -46,19 +45,11 @@ FUEL_DATA = {
 }
 
 def is_in_eca(lat, lon):
-    """
-    Determines whether the given coordinates fall within MARPOL Emission Control Areas (ECA).
-    Returns True if inside an ECA zone, False otherwise.
-    """
     if (48 <= lat <= 62 and -5 <= lon <= 12): return True 
     if (25 <= lat <= 50 and -80 <= lon <= -60): return True
     return False
 
 def get_live_weather(lat, lon, api_key):
-    """
-    Fetches live weather data from OpenWeather API and returns the wind speed converted to Beaufort scale.
-    Defaults to Beaufort 4 if API fails or key is missing to prevent application crashes.
-    """
     try:
         res = requests.get(f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units=metric").json()
         if res.get("cod") != 200: return 4 
@@ -66,10 +57,6 @@ def get_live_weather(lat, lon, api_key):
     except: return 4
 
 def calculate_fuel(speed, draft, w_area, bft, d_spd, d_dft, d_cons, beam, months_drydock, trim):
-    """
-    Calculates main engine fuel consumption considering hydrodynamic resistance, weather (Beaufort),
-    hull biofouling (months since drydock), and vessel trim. Returns consumption in tons per day.
-    """
     v_ms = speed * 0.5144
     p_des = (d_cons * 1000000) / (24 * 175) 
     
@@ -87,28 +74,16 @@ def calculate_fuel(speed, draft, w_area, bft, d_spd, d_dft, d_cons, beam, months
     return (p_total * (175 * (1 + 0.5 * (load - 0.75)**2)) * 24) / 1000000
 
 def get_cii(fuel, speed, dwt, ref, co2_f):
-    """
-    Calculates the Carbon Intensity Indicator (CII) rating (A to E) based on fuel consumption,
-    vessel speed, deadweight, and fuel CO2 emissions factor.
-    """
     if speed <= 0: return "E"
     ratio = ((fuel * co2_f * 1_000_000) / (dwt * speed * 24)) / ref
     return "A" if ratio < 0.83 else "B" if ratio < 0.94 else "C" if ratio < 1.06 else "D" if ratio < 1.19 else "E"
 
 def get_distance(l1, ln1, l2, ln2):
-    """
-    Calculates the great-circle distance between two points on the Earth's surface using the Haversine formula.
-    Returns distance in nautical miles (Nm).
-    """
     dl, dln = math.radians(l2 - l1), math.radians(ln2 - ln1)
     a = math.sin(dl/2)**2 + math.cos(math.radians(l1)) * math.cos(math.radians(l2)) * math.sin(dln/2)**2
     return 3440.065 * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 def get_ais_data(api_key, coords):
-    """
-    Connects to AISStream WebSocket to fetch real-time vessel traffic data around the destination coordinates.
-    Used for Just-In-Time (JIT) arrival calculations to monitor port congestion.
-    """
     lats, lons = [c[1] for c in coords], [c[0] for c in coords]
     box = [[[min(lats)-5.0, min(lons)-5.0], [max(lats)+5.0, max(lons)+5.0]]]
     msg = {"APIKey": api_key, "BoundingBoxes": box, "FilterMessageTypes": ["PositionReport"]}
@@ -135,10 +110,6 @@ def get_ais_data(api_key, coords):
     return list(vessels.values())
 
 def create_pdf(report_data):
-    """
-    Generates a formal PDF Voyage Order report containing AI-optimized routing, speed, and operational parameters.
-    Returns the generated PDF as encoded bytes for Streamlit download button.
-    """
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
@@ -307,11 +278,11 @@ with tab3:
                         wr_saved_usd += (cost_s - cost_d)
                         extra_days_total += (t_detour - t_straight)
                         seg = [[c[0]+0.85, c[1]-0.85] for c in seg]
-                        segments.append({'c': seg, 'color': '#9b59b6', 'eca': in_eca_zone}) 
+                        segments.append({'c': seg, 'color': '#9b59b6', 'eca': in_eca_zone, 'bft': bft, 'type': 'detour'}) 
                     else: 
-                        segments.append({'c': seg, 'color': '#e74c3c', 'eca': in_eca_zone}) 
+                        segments.append({'c': seg, 'color': '#e74c3c', 'eca': in_eca_zone, 'bft': bft, 'type': 'storm'}) 
                 else: 
-                    segments.append({'c': seg, 'color': '#2ecc71', 'eca': in_eca_zone}) 
+                    segments.append({'c': seg, 'color': '#2ecc71', 'eca': in_eca_zone, 'bft': bft, 'type': 'normal'}) 
                 
                 dist_nm += d
                 bft_sum += bft
@@ -342,21 +313,69 @@ with tab3:
             
             ai_cii_grade = get_cii(f_norm / norm_days, norm_v, dwt, ref_cii, f_co2)
             
+            # --- DÜZELTİLEN HARİTA ÇİZİM KISMI (LEGEND VE HOVER EKLENDİ) ---
             fig_map = go.Figure()
+            added_legends = set() # Lejantların tekrar etmemesi için küme
+            
             for s in segments:
                 dash_style = 'dash' if s['eca'] else 'solid'
-                fig_map.add_trace(go.Scattergeo(lon=[c[0] for c in s['c']], lat=[c[1] for c in s['c']], mode='lines', line=dict(width=4, color=s['color'], dash=dash_style)))
+                
+                # Çizginin rengine göre isim (Lejant) ve açıklama belirleme
+                if s['color'] == '#9b59b6':
+                    trace_name = "🌪️ AI Storm Detour"
+                    hover_text = f"Detour Route (Bft: {s['bft']})"
+                elif s['color'] == '#e74c3c':
+                    trace_name = "⚠️ Storm Penetration (Bft 7+)"
+                    hover_text = f"Heavy Weather (Bft: {s['bft']})"
+                else:
+                    trace_name = "🟢 Normal Route"
+                    hover_text = f"Calm Sea (Bft: {s['bft']})"
+                
+                if s['eca']:
+                    trace_name += " [ECA Zone]"
+                    hover_text += "<br>MARPOL ECA: Active"
+                
+                # Eğer bu isimde bir lejant daha önce eklenmediyse, lejantta göster.
+                show_leg = trace_name not in added_legends
+                added_legends.add(trace_name)
+
+                fig_map.add_trace(go.Scattergeo(
+                    lon=[c[0] for c in s['c']], 
+                    lat=[c[1] for c in s['c']], 
+                    mode='lines', 
+                    name=trace_name,
+                    showlegend=show_leg,
+                    legendgroup=trace_name, # Gruplama özelliği eklendi
+                    hoverinfo="text", # Sadece bizim yazdığımız text'i göster
+                    text=hover_text,
+                    line=dict(width=4, color=s['color'], dash=dash_style)
+                ))
+                
             if live_ships:
-                fig_map.add_trace(go.Scattergeo(lon=[v['lon'] for v in live_ships], lat=[v['lat'] for v in live_ships], mode='markers', marker=dict(size=4, color='blue')))
+                fig_map.add_trace(go.Scattergeo(
+                    lon=[v['lon'] for v in live_ships], 
+                    lat=[v['lat'] for v in live_ships], 
+                    mode='markers', 
+                    name="Live Port Traffic (AIS)",
+                    hoverinfo="text",
+                    text=[f"Vessel: {v['name']}<br>Speed: {v['sog']} Knots" for v in live_ships],
+                    marker=dict(size=5, color='blue', line=dict(width=1, color='white'))
+                ))
             
-            fig_map.update_layout(dragmode='pan', geo=dict(projection_type="equirectangular", showland=True, landcolor="#f0f0f0", showocean=True, oceancolor="#cce5ff"), height=600, margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
+            # Lejantı haritanın sol üst köşesine sabitlemek için ayar
+            fig_map.update_layout(
+                dragmode='pan', 
+                geo=dict(projection_type="equirectangular", showland=True, landcolor="#f0f0f0", showocean=True, oceancolor="#cce5ff"), 
+                height=600, 
+                margin=dict(l=0, r=0, t=0, b=0), 
+                showlegend=True, # Lejantı AKTİF ettik
+                legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255,255,255,0.8)") # Kutuyu şeffaf beyaz yaptık
+            )
             st.plotly_chart(fig_map, use_container_width=True)
 
-            # --- ALERTS & OPEX PANELS ---
             if eca_nm > 0 and not f_compliant:
                 st.error(f"🛑 **MARPOL ECA Regulation Alert:** Route crosses Emission Control Area for **{eca_nm:,.0f} Nm**. AI automatically bypassed {fuel_type} and switched main engine to compliant MGO to avoid heavy fines.")
             
-            # --- RESTORED STORM ALERTS (DÜZELTİLEN KISIM BURASI) ---
             if storm_encounters > 0:
                 if wr_active: 
                     st.success(f"🌪️ **AI Commercial Weather Routing:** AI detected Bft 7+ storm. Detour (**Purple Line**) added {extra_days_total:.1f} days, but saved **${wr_saved_usd:,.0f}** net OPEX vs going straight!")
