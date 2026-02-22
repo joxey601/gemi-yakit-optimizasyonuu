@@ -352,9 +352,17 @@ with tab3:
             fig_map.update_layout(dragmode='pan', geo=dict(projection_type="equirectangular", showland=True, landcolor="#f0f0f0", showocean=True, oceancolor="#cce5ff"), height=600, margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
             st.plotly_chart(fig_map, use_container_width=True)
 
+            # --- ALERTS & OPEX PANELS ---
             if eca_nm > 0 and not f_compliant:
                 st.error(f"🛑 **MARPOL ECA Regulation Alert:** Route crosses Emission Control Area for **{eca_nm:,.0f} Nm**. AI automatically bypassed {fuel_type} and switched main engine to compliant MGO to avoid heavy fines.")
             
+            # --- RESTORED STORM ALERTS (DÜZELTİLEN KISIM BURASI) ---
+            if storm_encounters > 0:
+                if wr_active: 
+                    st.success(f"🌪️ **AI Commercial Weather Routing:** AI detected Bft 7+ storm. Detour (**Purple Line**) added {extra_days_total:.1f} days, but saved **${wr_saved_usd:,.0f}** net OPEX vs going straight!")
+                else: 
+                    st.warning(f"🌪️ **AI Commercial Weather Routing:** AI detected storm. Punched through (**Red Line**) as detouring was calculated to be more expensive due to daily charter rates.")
+
             st.markdown("### 💼 Total OPEX & Hydrodynamic Optimizer")
             if opex_norm > opex_jit:
                 st.success(f"**💡 AI JIT Recommendation:** Reduce speed to **{jit_v:.1f} Knots**. Save **${opex_norm - opex_jit:,.0f}** in OPEX!")
