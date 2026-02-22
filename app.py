@@ -22,9 +22,9 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V10.3", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.3 (Commercial Edition)")
-st.markdown("**Modules:** Computer Vision | Big Data | Explainable AI (SHAP) | 2D Nav & Weather Routing | JIT | **Total OPEX & Crew Cost** | PDF Export")
+st.set_page_config(page_title="Vessel AI & CII Optimizer V10.4", page_icon="🚢", layout="wide")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.4 (High-Speed SHAP)")
+st.markdown("**Modules:** Computer Vision | Big Data | Fast Explainable AI (SHAP) | 2D Nav & Weather Routing | JIT | Total OPEX | PDF Export")
 st.markdown("---")
 
 if 'calc_wind_area' not in st.session_state: st.session_state.calc_wind_area = 800.0
@@ -145,7 +145,7 @@ ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 # =============================================================================
 # MAIN TABS UI
 # =============================================================================
-tab1, tab2, tab3, tab4 = st.tabs(["📷 CV Wind Area", "🧠 Explainable AI Training", "🗺️ 2D OPEX & Nav", "📑 Captain's Orders"])
+tab1, tab2, tab3, tab4 = st.tabs(["📷 CV Wind Area", "🧠 Fast AI Training (SHAP)", "🗺️ 2D OPEX & Nav", "📑 Captain's Orders"])
 
 # --- TAB 1: COMPUTER VISION ---
 with tab1:
@@ -164,7 +164,7 @@ with tab1:
             c1.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Bounding Box Applied")
             c2.success(f"🌬️ Calculated Wind Area: {st.session_state.calc_wind_area:.1f} m²")
 
-# --- TAB 2: AI TRAINING & SHAP ---
+# --- TAB 2: AI TRAINING & SHAP (OPTIMIZED FOR SPEED) ---
 with tab2:
     st.subheader("4D Random Forest & Explainable AI (SHAP)")
     col_t1, col_t2 = st.columns([1, 2])
@@ -191,12 +191,19 @@ with tab2:
     with col_t2:
         if st.session_state.ai_model is not None:
             st.markdown("**🧠 Feature Importance (SHAP Analysis)**")
-            st.caption("This chart explains WHICH factors increase your fuel consumption the most.")
-            explainer = shap.TreeExplainer(st.session_state.ai_model)
-            shap_values = explainer.shap_values(st.session_state.df_sim)
-            fig_shap, ax = plt.subplots(figsize=(6, 4))
-            shap.summary_plot(shap_values, st.session_state.df_sim, plot_type="bar", show=False)
-            st.pyplot(fig_shap)
+            st.caption("This chart explains WHICH factors increase your fuel consumption the most. (Fast Sampled)")
+            
+            with st.spinner("Generating SHAP Explanations (Optimized)..."):
+                # DÜZELTME 1: SHAP hesaplamasını hızlandırmak için verinin küçük bir alt kümesini (sample) alıyoruz.
+                X_sample = shap.sample(st.session_state.df_sim, 100) 
+                
+                # DÜZELTME 2: Ağaç modellerinde oluşabilecek hataları engellemek için check_additivity kapatıldı.
+                explainer = shap.TreeExplainer(st.session_state.ai_model)
+                shap_values = explainer.shap_values(X_sample, check_additivity=False) 
+                
+                fig_shap, ax = plt.subplots(figsize=(6, 4))
+                shap.summary_plot(shap_values, X_sample, plot_type="bar", show=False)
+                st.pyplot(fig_shap)
 
 # --- TAB 3: 2D NAVIGATION & OPEX ---
 with tab3:
@@ -213,7 +220,6 @@ with tab3:
             try: coords = sr.searoute([c_lon, c_lat], [d_lon, d_lat])["geometry"]["coordinates"]
             except: st.error("Routing failed."); st.stop()
             
-            # 1. Hız Tanımlamaları ve ML Fonksiyonu
             max_v = d_speed
             norm_v = 10.0 + (max_v - 10.0) * (urgency / 100.0)
             
@@ -222,11 +228,10 @@ with tab3:
                     return st.session_state.ai_model.predict(pd.DataFrame([[v, d_draft, b, m]], columns=['Speed_Knots', 'Draft_m', 'Beaufort', 'Months_Drydock']))[0]
                 return calculate_fuel(v, d_draft, st.session_state.calc_wind_area, b, d_speed, d_draft, d_cons, beam, m)
 
-            # 2. Ticari Rota Analizi (Maaş & Yakıt Trade-off)
             segments, dist_nm, bft_sum = [], 0, 0
             storm_encounters = 0
-            storm_eval_s_cost = 0 # Düz gitmenin TOPLAM dolar maliyeti
-            storm_eval_d_cost = 0 # Dolaşmanın TOPLAM dolar maliyeti
+            storm_eval_s_cost = 0 
+            storm_eval_d_cost = 0 
             extra_days_total = 0
             wr_active = False
             wr_saved_usd = 0
@@ -240,13 +245,10 @@ with tab3:
                 
                 if bft >= 7:
                     storm_encounters += 1
-                    
-                    # Düz geçiş (Fırtına) zamanı ve yakıtı
                     t_straight = d / (norm_v * 24)
                     f_straight = get_f(norm_v, bft, months_drydock) * t_straight
                     cost_s = (f_straight * f_price) + (f_straight * f_co2 * eu_ets) + (t_straight * daily_charter)
                     
-                    # Etrafından dolaşma zamanı ve yakıtı (+15% mesafe, 4 Bft)
                     t_detour = (d * 1.15) / (norm_v * 24)
                     f_detour = get_f(norm_v, 4, months_drydock) * t_detour
                     cost_d = (f_detour * f_price) + (f_detour * f_co2 * eu_ets) + (t_detour * daily_charter)
@@ -254,7 +256,6 @@ with tab3:
                     storm_eval_s_cost += cost_s
                     storm_eval_d_cost += cost_d
                     
-                    # AI Kararı: Hangi OPEX daha ucuz?
                     if cost_d < cost_s:
                         wr_active = True
                         bft = 4
@@ -262,18 +263,17 @@ with tab3:
                         wr_saved_usd += (cost_s - cost_d)
                         extra_days_total += (t_detour - t_straight)
                         seg = [[c[0]+0.85, c[1]-0.85] for c in seg]
-                        segments.append({'c': seg, 'color': '#9b59b6'}) # Purple Detour
+                        segments.append({'c': seg, 'color': '#9b59b6'}) 
                     else: 
-                        segments.append({'c': seg, 'color': '#e74c3c'}) # Red Storm
+                        segments.append({'c': seg, 'color': '#e74c3c'}) 
                 else: 
-                    segments.append({'c': seg, 'color': '#2ecc71'}) # Green Safe
+                    segments.append({'c': seg, 'color': '#2ecc71'}) 
                 
                 dist_nm += d
                 bft_sum += bft
                 
             avg_bft = round(bft_sum / len(segments))
             
-            # 3. AIS ve JIT Hesaplamaları
             live_ships, port_queue = get_ais_data(api_ais, coords) if api_ais else [], 0
             for s in live_ships:
                 if get_distance(d_lat, d_lon, s['lat'], s['lon']) <= 30: port_queue += 1
@@ -282,7 +282,10 @@ with tab3:
             wait_hrs = (port_queue * port_ops) / port_terms
             jit_v = max(8.0, dist_nm / ((norm_days + wait_hrs/24) * 24))
 
+            bad_days = dist_nm / (max_v * 24) 
+
             f_norm = get_f(norm_v, avg_bft, months_drydock) * norm_days
+            f_bad = get_f(max_v, avg_bft, months_drydock) * bad_days
             f_jit = get_f(jit_v, avg_bft, months_drydock) * (dist_nm / (jit_v * 24))
             clean_f = get_f(norm_v, avg_bft, 0) * norm_days
             
@@ -291,6 +294,8 @@ with tab3:
                 
             opex_norm = calc_opex(f_norm, norm_days) + (wait_hrs * (daily_charter/24))
             opex_jit = calc_opex(f_jit, dist_nm/(jit_v*24)) 
+            
+            _, ai_cii_grade = calculate_cii_grade(f_norm / norm_days, norm_v, dwt, ref_cii, f_co2)
             
             # --- 2D FLAT MAP ---
             fig_map = go.Figure()
