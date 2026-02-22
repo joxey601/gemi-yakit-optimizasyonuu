@@ -46,11 +46,19 @@ FUEL_DATA = {
 }
 
 def is_in_eca(lat, lon):
+    """
+    Determines whether the given coordinates fall within MARPOL Emission Control Areas (ECA).
+    Returns True if inside an ECA zone, False otherwise.
+    """
     if (48 <= lat <= 62 and -5 <= lon <= 12): return True 
     if (25 <= lat <= 50 and -80 <= lon <= -60): return True
     return False
 
 def get_live_weather(lat, lon, api_key):
+    """
+    Fetches live weather data from OpenWeather API and returns the wind speed converted to Beaufort scale.
+    Defaults to Beaufort 4 if API fails or key is missing to prevent application crashes.
+    """
     try:
         res = requests.get(f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units=metric").json()
         if res.get("cod") != 200: return 4 
@@ -58,6 +66,10 @@ def get_live_weather(lat, lon, api_key):
     except: return 4
 
 def calculate_fuel(speed, draft, w_area, bft, d_spd, d_dft, d_cons, beam, months_drydock, trim):
+    """
+    Calculates main engine fuel consumption considering hydrodynamic resistance, weather (Beaufort),
+    hull biofouling (months since drydock), and vessel trim. Returns consumption in tons per day.
+    """
     v_ms = speed * 0.5144
     p_des = (d_cons * 1000000) / (24 * 175) 
     
@@ -75,16 +87,28 @@ def calculate_fuel(speed, draft, w_area, bft, d_spd, d_dft, d_cons, beam, months
     return (p_total * (175 * (1 + 0.5 * (load - 0.75)**2)) * 24) / 1000000
 
 def get_cii(fuel, speed, dwt, ref, co2_f):
+    """
+    Calculates the Carbon Intensity Indicator (CII) rating (A to E) based on fuel consumption,
+    vessel speed, deadweight, and fuel CO2 emissions factor.
+    """
     if speed <= 0: return "E"
     ratio = ((fuel * co2_f * 1_000_000) / (dwt * speed * 24)) / ref
     return "A" if ratio < 0.83 else "B" if ratio < 0.94 else "C" if ratio < 1.06 else "D" if ratio < 1.19 else "E"
 
 def get_distance(l1, ln1, l2, ln2):
+    """
+    Calculates the great-circle distance between two points on the Earth's surface using the Haversine formula.
+    Returns distance in nautical miles (Nm).
+    """
     dl, dln = math.radians(l2 - l1), math.radians(ln2 - ln1)
     a = math.sin(dl/2)**2 + math.cos(math.radians(l1)) * math.cos(math.radians(l2)) * math.sin(dln/2)**2
     return 3440.065 * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 def get_ais_data(api_key, coords):
+    """
+    Connects to AISStream WebSocket to fetch real-time vessel traffic data around the destination coordinates.
+    Used for Just-In-Time (JIT) arrival calculations to monitor port congestion.
+    """
     lats, lons = [c[1] for c in coords], [c[0] for c in coords]
     box = [[[min(lats)-5.0, min(lons)-5.0], [max(lats)+5.0, max(lons)+5.0]]]
     msg = {"APIKey": api_key, "BoundingBoxes": box, "FilterMessageTypes": ["PositionReport"]}
@@ -111,6 +135,10 @@ def get_ais_data(api_key, coords):
     return list(vessels.values())
 
 def create_pdf(report_data):
+    """
+    Generates a formal PDF Voyage Order report containing AI-optimized routing, speed, and operational parameters.
+    Returns the generated PDF as encoded bytes for Streamlit download button.
+    """
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
@@ -366,7 +394,6 @@ with tab4:
         sim_rpm = np.random.normal(base_rpm, 1.5, 100)
         sim_fuel = np.random.normal((d_cons/24) * (opt_speed/d_speed)**3, 0.2, 100)
         
-        # DÜZELTİLEN KISIM: title_font yerine dict içi tanımlama kullanıldı.
         fig_iot = go.Figure()
         fig_iot.add_trace(go.Scatter(x=time_index, y=sim_rpm, name="ME RPM", line=dict(color="cyan")))
         fig_iot.add_trace(go.Scatter(x=time_index, y=sim_fuel, name="Fuel Flow (T/hr)", yaxis="y2", line=dict(color="orange")))
