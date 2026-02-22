@@ -22,8 +22,8 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V10.4", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.4 (High-Speed SHAP)")
+st.set_page_config(page_title="Vessel AI & CII Optimizer V10.5", page_icon="🚢", layout="wide")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.5 (Global Edition)")
 st.markdown("**Modules:** Computer Vision | Big Data | Fast Explainable AI (SHAP) | 2D Nav & Weather Routing | JIT | Total OPEX | PDF Export")
 st.markdown("---")
 
@@ -170,8 +170,8 @@ with tab2:
     col_t1, col_t2 = st.columns([1, 2])
     with col_t1:
         sim_days = st.number_input("Dataset Size (Days):", min_value=1000, value=10000)
-        if st.button("🚀 Train Digital Twin"):
-            with st.spinner("Generating Ocean Data & Training Model..."):
+        if st.button("🚀 Initialize AI Model"):
+            with st.spinner("AI is learning ocean dynamics..."):
                 np.random.seed(42)
                 s_v = np.random.uniform(d_speed*0.4, d_speed*1.05, sim_days)
                 s_d = np.random.uniform(d_draft*0.5, d_draft, sim_days)
@@ -194,10 +194,7 @@ with tab2:
             st.caption("This chart explains WHICH factors increase your fuel consumption the most. (Fast Sampled)")
             
             with st.spinner("Generating SHAP Explanations (Optimized)..."):
-                # DÜZELTME 1: SHAP hesaplamasını hızlandırmak için verinin küçük bir alt kümesini (sample) alıyoruz.
                 X_sample = shap.sample(st.session_state.df_sim, 100) 
-                
-                # DÜZELTME 2: Ağaç modellerinde oluşabilecek hataları engellemek için check_additivity kapatıldı.
                 explainer = shap.TreeExplainer(st.session_state.ai_model)
                 shap_values = explainer.shap_values(X_sample, check_additivity=False) 
                 
@@ -210,11 +207,12 @@ with tab3:
     st.subheader("🌍 2D Global Navigation & Total OPEX Simulator")
     ports = {"Tokyo": (35.6, 139.6), "Shanghai": (31.2, 121.5), "Singapore": (1.3, 103.8), "Rotterdam": (51.9, 4.4), "Istanbul": (41.0, 28.9), "Panama": (9.1, -79.6), "New York": (40.7, -74.0)}
     cn1, cn2, cn3, cn4 = st.columns(4)
-    c_lat, c_lon = cn1.number_input("Lat:", value=35.0), cn2.number_input("Lon:", value=15.0)
-    d_port = cn3.selectbox("Destination:", list(ports.keys()), index=3)
-    urgency = cn4.slider("Urgency (Speed %):", 0, 100, 50)
+    c_lat = cn1.number_input("Current Lat:", value=35.0)
+    c_lon = cn2.number_input("Current Lon:", value=15.0)
+    d_port = cn3.selectbox("Destination Port:", list(ports.keys()), index=3)
+    urgency = cn4.slider("Speed Priority (%):", 0, 100, 50)
 
-    if st.button("🛰️ Initialize AI Auto-Pilot"):
+    if st.button("🛰️ Start Route Analysis & Live AIS"):
         with st.spinner("Analyzing Weather, AIS, and calculating Commercial OPEX..."):
             d_lat, d_lon = ports[d_port]
             try: coords = sr.searoute([c_lon, c_lat], [d_lon, d_lat])["geometry"]["coordinates"]
@@ -281,7 +279,6 @@ with tab3:
             norm_days = dist_nm / (norm_v * 24)
             wait_hrs = (port_queue * port_ops) / port_terms
             jit_v = max(8.0, dist_nm / ((norm_days + wait_hrs/24) * 24))
-
             bad_days = dist_nm / (max_v * 24) 
 
             f_norm = get_f(norm_v, avg_bft, months_drydock) * norm_days
@@ -295,7 +292,8 @@ with tab3:
             opex_norm = calc_opex(f_norm, norm_days) + (wait_hrs * (daily_charter/24))
             opex_jit = calc_opex(f_jit, dist_nm/(jit_v*24)) 
             
-            _, ai_cii_grade = calculate_cii_grade(f_norm / norm_days, norm_v, dwt, ref_cii, f_co2)
+            # [FIXED LINE] NameError solved by using the correct function name 'get_cii'
+            ai_cii_grade = get_cii(f_norm / norm_days, norm_v, dwt, ref_cii, f_co2)
             
             # --- 2D FLAT MAP ---
             fig_map = go.Figure()
@@ -324,12 +322,30 @@ with tab3:
             col_o2.metric("JIT Optimized OPEX", f"${opex_jit:,.0f}", f"{f_jit:,.0f} Tons Fuel", delta_color="off")
             col_o3.metric("EU ETS Tax Burden", f"€{f_norm * f_co2 * eu_ets:,.0f}", f"Fuel: {fuel_type}", delta_color="off")
 
+            st.subheader("📊 Voyage & Financial Report")
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Estimated Fuel", f"{f_norm:,.0f} Tons", f"CII Grade: {ai_cii_grade}")
+            r2.metric("Voyage Duration", f"{norm_days:,.1f} Days")
+            bad_co2_total = f_bad * f_co2
+            r3.metric("Worst Case (Max Speed)", f"{f_bad:,.0f} Tons", f"Tax: €{bad_co2_total * eu_ets:,.0f}", delta_color="inverse")
+
+            st.markdown("---")
+            st.subheader("📈 ML Fuel Optimization Curve")
+            v_range = np.linspace(10, max_v, 20)
+            f_range = [get_f(vx, avg_bft, months_drydock) * (dist_nm/(vx*24)) for vx in v_range]
+            fig_curve = go.Figure()
+            fig_curve.add_trace(go.Scatter(x=v_range, y=f_range, mode='lines', name='ML Curve', line=dict(color='#3498db', width=3)))
+            fig_curve.add_trace(go.Scatter(x=[max_v], y=[f_bad], mode='markers+text', name='Max Speed', marker=dict(color='#e74c3c', size=12, symbol='x'), text=['❌ Max Speed'], textposition='top right'))
+            fig_curve.add_trace(go.Scatter(x=[jit_v], y=[f_jit], mode='markers+text', name='JIT AI Optimization', marker=dict(color='#2ecc71', size=14), text=['✅ JIT Optimization'], textposition='bottom right'))
+            fig_curve.update_layout(xaxis_title='Speed (Knots)', yaxis_title='Total Voyage Fuel (Tons)', height=400)
+            st.plotly_chart(fig_curve, use_container_width=True)
+
             st.session_state.voyage_report = {
                 "Destination": d_port, "Distance (Nm)": round(dist_nm), "Avg Weather (Bft)": avg_bft,
                 "Recommended Speed (Knots)": round(jit_v, 1) if opex_norm > opex_jit else round(norm_v, 1),
                 "Est. Fuel (Tons)": round(f_jit if opex_norm > opex_jit else f_norm),
                 "Total OPEX Estimate ($)": round(min(opex_norm, opex_jit)),
-                "CII Grade Estimate": get_cii(f_norm/norm_days, norm_v, dwt, ref_cii, f_co2)
+                "CII Grade Estimate": ai_cii_grade
             }
 
 # --- TAB 4: PDF EXPORT ---
