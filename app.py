@@ -23,7 +23,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
 st.set_page_config(page_title="Vessel AI & CII Optimizer V11.6", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V11.6 (Stable IoT)")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator")
 st.markdown("**Modules:** Computer Vision | 5D Explainable AI | Nav & ECA | JIT OPEX | **Live Engine Telemetry** | **Fleet Database** | PDF Export")
 st.markdown("---")
 
