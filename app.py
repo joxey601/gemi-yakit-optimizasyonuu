@@ -22,15 +22,16 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V11.0", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V11.0 (Hydro & Law Edition)")
-st.markdown("**Modules:** Computer Vision | 5D Explainable AI | 2D Nav | JIT | Total OPEX | **Trim Opt.** | **ECA Zones**")
+st.set_page_config(page_title="Vessel AI & CII Optimizer V11.5", page_icon="🚢", layout="wide")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator V11.5 (IoT Edition)")
+st.markdown("**Modules:** Computer Vision | 5D Explainable AI | Nav & ECA | JIT OPEX | **Live Engine Telemetry** | **Fleet Database** | PDF Export")
 st.markdown("---")
 
 if 'calc_wind_area' not in st.session_state: st.session_state.calc_wind_area = 800.0
 if 'ai_model' not in st.session_state: st.session_state.ai_model = None
 if 'df_sim' not in st.session_state: st.session_state.df_sim = None
 if 'voyage_report' not in st.session_state: st.session_state.voyage_report = None
+if 'fleet_history' not in st.session_state: st.session_state.fleet_history = [] # YENİ: Filo Veritabanı
 
 # =============================================================================
 # PHYSICS ENGINE, ECA & API LIBRARIES
@@ -44,9 +45,7 @@ FUEL_DATA = {
     "Ammonia (Zero Carbon)": {"co2_factor": 0.0, "price": 1200, "eca_compliant": True}
 }
 
-# MARPOL Emission Control Area (ECA) Geofencing
 def is_in_eca(lat, lon):
-    # Simplified ECA bounding boxes (North Europe & US East Coast)
     if (48 <= lat <= 62 and -5 <= lon <= 12): return True 
     if (25 <= lat <= 50 and -80 <= lon <= -60): return True
     return False
@@ -69,7 +68,6 @@ def calculate_fuel(speed, draft, w_area, bft, d_spd, d_dft, d_cons, beam, months
     p_wind = (0.5 * 1.225 * 0.8 * w_area * (v_rel ** 2) * v_ms) / 1000
     p_wave = ((1/16) * 1025 * 9.81 * ((0.2 * (bft ** 2)) ** 2) * beam * math.sqrt(beam / max(100, beam*6.5)) * v_ms) / 1000
     
-    # YENİ: Trim Optimizasyonu. (Varsayım: Hafif kıça trim +0.5 optimumdur)
     trim_effect = 1.0 + (abs(trim - 0.5) * 0.02)
     p_total = (p_calm + p_wind + p_wave) * trim_effect
     
@@ -156,13 +154,12 @@ f_price = FUEL_DATA[fuel_type]["price"]
 f_compliant = FUEL_DATA[fuel_type]["eca_compliant"]
 mgo_price = FUEL_DATA["MGO (Marine Gas Oil)"]["price"]
 mgo_co2 = FUEL_DATA["MGO (Marine Gas Oil)"]["co2_factor"]
-
 ref_cii = (d_cons * 3.114 * 1_000_000) / (dwt * d_speed * 24)
 
 # =============================================================================
 # MAIN TABS UI
 # =============================================================================
-tab1, tab2, tab3, tab4 = st.tabs(["📷 CV Wind Area", "🧠 5D AI Training (SHAP)", "🗺️ 2D OPEX & Route", "📑 Captain's Orders"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📷 CV Wind Area", "🧠 5D AI Training", "🗺️ 2D OPEX Route", "📡 Live Engine IoT", "🗄️ Fleet & Reports"])
 
 # --- TAB 1: COMPUTER VISION ---
 with tab1:
@@ -194,7 +191,7 @@ with tab2:
                 s_d = np.random.uniform(d_draft*0.5, d_draft, sim_days)
                 s_b = np.random.randint(0, 11, sim_days)
                 s_m = np.random.randint(0, 61, sim_days)
-                s_t = np.random.uniform(-2.0, 2.0, sim_days) # Yeni: Trim Verisi
+                s_t = np.random.uniform(-2.0, 2.0, sim_days)
                 
                 s_f = [calculate_fuel(s_v[i], s_d[i], st.session_state.calc_wind_area, s_b[i], d_speed, d_draft, d_cons, beam, s_m[i], s_t[i]) for i in range(sim_days)]
                 
@@ -210,12 +207,10 @@ with tab2:
     with col_t2:
         if st.session_state.ai_model is not None:
             st.markdown("**🧠 5D Feature Importance (SHAP Analysis)**")
-            st.caption("Notice how Trim now impacts fuel consumption alongside other variables.")
             with st.spinner("Generating SHAP Explanations..."):
                 X_sample = shap.sample(st.session_state.df_sim, 100) 
                 explainer = shap.TreeExplainer(st.session_state.ai_model)
                 shap_values = explainer.shap_values(X_sample, check_additivity=False) 
-                
                 fig_shap, ax = plt.subplots(figsize=(6, 4))
                 shap.summary_plot(shap_values, X_sample, plot_type="bar", show=False)
                 st.pyplot(fig_shap)
@@ -245,7 +240,7 @@ with tab3:
                 return calculate_fuel(v, d_draft, st.session_state.calc_wind_area, b, d_speed, d_draft, d_cons, beam, m, t)
 
             segments, dist_nm, bft_sum = [], 0, 0
-            eca_nm = 0 # YENİ: ECA içinde gidilen mil
+            eca_nm = 0 
             storm_encounters = 0
             storm_eval_s_cost, storm_eval_d_cost = 0, 0 
             extra_days_total, wr_saved_usd = 0, 0
@@ -258,7 +253,6 @@ with tab3:
                 d = sum([get_distance(seg[k][1], seg[k][0], seg[k+1][1], seg[k+1][0]) for k in range(len(seg)-1)])
                 bft = get_live_weather(seg[0][1], seg[0][0], api_weather) if api_weather else 4
                 
-                # ECA KONTROLÜ
                 in_eca_zone = is_in_eca(seg[0][1], seg[0][0])
                 if in_eca_zone: eca_nm += d
                 
@@ -301,19 +295,16 @@ with tab3:
                 if get_distance(d_lat, d_lon, s['lat'], s['lon']) <= 30: port_queue += 1
 
             norm_days = dist_nm / (norm_v * 24)
-            wait_hrs = (port_queue * 12) / 3 # Simplified JIT base
+            wait_hrs = (port_queue * 12) / 3 
             jit_v = max(8.0, dist_nm / ((norm_days + wait_hrs/24) * 24))
 
-            # Fuel Calculation based on ECA ratio
             eca_ratio = eca_nm / dist_nm if dist_nm > 0 else 0
             f_norm = get_f(norm_v, avg_bft, months_drydock, vessel_trim) * norm_days
             f_jit = get_f(jit_v, avg_bft, months_drydock, vessel_trim) * (dist_nm / (jit_v * 24))
             
-            # OPEX Calculation (ECA Blended)
             def calc_blended_opex(total_fuel, days):
                 fuel_eca = total_fuel * eca_ratio
                 fuel_open = total_fuel * (1 - eca_ratio)
-                
                 cost_open = (fuel_open * f_price) + (fuel_open * f_co2 * eu_ets)
                 cost_eca = (fuel_eca * (mgo_price if not f_compliant else f_price)) + (fuel_eca * (mgo_co2 if not f_compliant else f_co2) * eu_ets)
                 return cost_open + cost_eca + (days * daily_charter)
@@ -323,10 +314,8 @@ with tab3:
             
             ai_cii_grade = get_cii(f_norm / norm_days, norm_v, dwt, ref_cii, f_co2)
             
-            # --- 2D FLAT MAP ---
             fig_map = go.Figure()
             for s in segments:
-                # Eğer bölge ECA ise çizgiyi kesikli yap (Görsel Şov)
                 dash_style = 'dash' if s['eca'] else 'solid'
                 fig_map.add_trace(go.Scattergeo(lon=[c[0] for c in s['c']], lat=[c[1] for c in s['c']], mode='lines', line=dict(width=4, color=s['color'], dash=dash_style)))
             if live_ships:
@@ -335,14 +324,9 @@ with tab3:
             fig_map.update_layout(dragmode='pan', geo=dict(projection_type="equirectangular", showland=True, landcolor="#f0f0f0", showocean=True, oceancolor="#cce5ff"), height=600, margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
             st.plotly_chart(fig_map, use_container_width=True)
 
-            # --- DYNAMIC PANELS ---
             if eca_nm > 0 and not f_compliant:
                 st.error(f"🛑 **MARPOL ECA Regulation Alert:** Route crosses Emission Control Area for **{eca_nm:,.0f} Nm**. AI automatically bypassed {fuel_type} and switched main engine to compliant MGO to avoid heavy fines.")
             
-            if storm_encounters > 0:
-                if wr_active: st.success(f"🌪️ **AI Commercial Weather Routing:** Detour added {extra_days_total:.1f} days, but saved **${wr_saved_usd:,.0f}** net OPEX vs going straight!")
-                else: st.warning(f"🌪️ **AI Commercial Weather Routing:** AI punched through storm (Red Line) as detouring was calculated to be more expensive due to charter rates.")
-
             st.markdown("### 💼 Total OPEX & Hydrodynamic Optimizer")
             if opex_norm > opex_jit:
                 st.success(f"**💡 AI JIT Recommendation:** Reduce speed to **{jit_v:.1f} Knots**. Save **${opex_norm - opex_jit:,.0f}** in OPEX!")
@@ -353,17 +337,71 @@ with tab3:
             col_o3.metric("ECA Compliance Distance", f"{eca_nm:,.0f} Nm")
 
             st.session_state.voyage_report = {
+                "Timestamp": time.strftime("%Y-%m-%d %H:%M"),
                 "Destination": d_port, "Distance (Nm)": round(dist_nm), "Trim State (m)": vessel_trim,
                 "ECA Sailing (Nm)": round(eca_nm), "Recommended Speed": round(jit_v, 1) if opex_norm > opex_jit else round(norm_v, 1),
                 "Est. Fuel (Tons)": round(f_jit if opex_norm > opex_jit else f_norm),
                 "Total OPEX ($)": round(min(opex_norm, opex_jit)), "CII Grade": ai_cii_grade
             }
+            # YENİ: Başarılı olan her seferi veritabanına ekle
+            st.session_state.fleet_history.append(st.session_state.voyage_report)
 
-# --- TAB 4: PDF EXPORT ---
+# --- TAB 4: LIVE ENGINE IOT TELEMETRY (YENİ) ---
 with tab4:
-    st.subheader("📑 Kaptan Sefer Emri (Official Voyage Order)")
-    st.info("Export the AI-Optimized voyage plan as a formal PDF document for the Master of the Vessel.")
+    st.subheader("📡 Engine Control Room (ECR) Live Telemetry")
+    st.caption("Simulated real-time Engine Data based on AI-Optimized Speed parameters.")
+    
     if st.session_state.voyage_report:
-        st.write(st.session_state.voyage_report)
-        pdf_bytes = create_pdf(st.session_state.voyage_report)
-        st.download_button(label="📥 Download PDF Voyage Order", data=pdf_bytes, file_name="AI_Voyage_Order.pdf", mime="application/pdf")
+        opt_speed = st.session_state.voyage_report["Recommended Speed"]
+        base_rpm = (opt_speed / d_speed) * 105.0 # Assuming 105 RPM at design speed
+        base_egt = 320.0 + (opt_speed / d_speed) * 80.0 # Exhaust Gas Temp
+        
+        c_i1, c_i2, c_i3, c_i4 = st.columns(4)
+        # Random noise for realism
+        c_i1.metric("Main Engine RPM", f"{base_rpm + np.random.uniform(-0.5, 0.5):.1f} RPM", "Optimized", delta_color="normal")
+        c_i2.metric("Exhaust Gas Temp (EGT)", f"{base_egt + np.random.uniform(-2.0, 2.0):.1f} °C", "Stable", delta_color="off")
+        c_i3.metric("Scavenge Air Press.", f"{2.8 + (opt_speed/d_speed)*0.5 + np.random.uniform(-0.05, 0.05):.2f} Bar", "Normal", delta_color="off")
+        c_i4.metric("Dynamic SFOC", f"{175 + np.random.uniform(-1.0, 1.0):.1f} g/kWh", "-1.2 g/kWh", delta_color="inverse")
+        
+        st.markdown("**📈 24-Hour Telemetry Trend (RPM vs Fuel Flow)**")
+        # Simülasyon veri seti oluşturma (Son 24 saat)
+        time_index = pd.date_range(end=pd.Timestamp.now(), periods=100, freq='15min')
+        sim_rpm = np.random.normal(base_rpm, 1.5, 100)
+        sim_fuel = np.random.normal((d_cons/24) * (opt_speed/d_speed)**3, 0.2, 100)
+        
+        fig_iot = go.Figure()
+        fig_iot.add_trace(go.Scatter(x=time_index, y=sim_rpm, name="ME RPM", line=dict(color="cyan")))
+        fig_iot.add_trace(go.Scatter(x=time_index, y=sim_fuel, name="Fuel Flow (T/hr)", yaxis="y2", line=dict(color="orange")))
+        
+        fig_iot.update_layout(
+            yaxis=dict(title="RPM", titlefont=dict(color="cyan"), tickfont=dict(color="cyan")),
+            yaxis2=dict(title="Fuel Flow", titlefont=dict(color="orange"), tickfont=dict(color="orange"), anchor="x", overlaying="y", side="right"),
+            height=350, margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e", font=dict(color="white")
+        )
+        st.plotly_chart(fig_iot, use_container_width=True)
+    else:
+        st.warning("⚠️ Waiting for Route Analysis to initialize Engine Telemetry...")
+
+# --- TAB 5: REPORTS & FLEET DATABASE (YENİ) ---
+with tab5:
+    st.subheader("🗄️ Fleet Voyage History & Reports")
+    
+    col_f1, col_f2 = st.columns([1, 2])
+    with col_f1:
+        st.info("Export the current AI-Optimized voyage plan as a formal PDF document.")
+        if st.session_state.voyage_report:
+            pdf_bytes = create_pdf(st.session_state.voyage_report)
+            st.download_button(label="📥 Download PDF Voyage Order", data=pdf_bytes, file_name="AI_Voyage_Order.pdf", mime="application/pdf")
+        else:
+            st.warning("⚠️ No active voyage to export.")
+            
+    with col_f2:
+        st.markdown("**📊 Fleet Operations Database (Session)**")
+        if len(st.session_state.fleet_history) > 0:
+            df_history = pd.DataFrame(st.session_state.fleet_history)
+            st.dataframe(df_history, use_container_width=True)
+            
+            total_savings = df_history["Total OPEX ($)"].sum()
+            st.success(f"**Total Fleet OPEX:** ${total_savings:,.0f}")
+        else:
+            st.caption("No voyages recorded yet. Run a route analysis to start logging.")
