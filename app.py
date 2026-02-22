@@ -22,9 +22,9 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V10.1", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.1 (Master Edition)")
-st.markdown("**Modules:** Computer Vision | Big Data | Explainable AI (SHAP) | 2D Nav & Weather Routing | JIT | Total OPEX | PDF Export")
+st.set_page_config(page_title="Vessel AI & CII Optimizer V10.3", page_icon="🚢", layout="wide")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator V10.3 (Commercial Edition)")
+st.markdown("**Modules:** Computer Vision | Big Data | Explainable AI (SHAP) | 2D Nav & Weather Routing | JIT | **Total OPEX & Crew Cost** | PDF Export")
 st.markdown("---")
 
 if 'calc_wind_area' not in st.session_state: st.session_state.calc_wind_area = 800.0
@@ -109,7 +109,6 @@ def create_pdf(report_data):
     pdf.ln(10)
     for key, val in report_data.items():
         pdf.set_font("Arial", 'B', 11)
-        # BURASI DÜZELTİLDİ: Genişlik 50'den 80'e çıkarıldı, iç içe geçme sorunu çözüldü.
         pdf.cell(80, 8, txt=str(key)+":", ln=False)
         pdf.set_font("Arial", '', 11)
         pdf.cell(100, 8, txt=str(val), ln=True)
@@ -186,7 +185,7 @@ with tab2:
                 
                 model = RandomForestRegressor(n_estimators=100).fit(X_tr, y_tr)
                 st.session_state.ai_model = model
-                st.session_state.df_sim = X_te # Save for SHAP
+                st.session_state.df_sim = X_te 
                 st.success(f"✅ AI Accuracy (R²): {r2_score(y_te, model.predict(X_te))*100:.2f}%")
 
     with col_t2:
@@ -209,12 +208,29 @@ with tab3:
     urgency = cn4.slider("Urgency (Speed %):", 0, 100, 50)
 
     if st.button("🛰️ Initialize AI Auto-Pilot"):
-        with st.spinner("Analyzing Weather, AIS, and calculating OPEX..."):
+        with st.spinner("Analyzing Weather, AIS, and calculating Commercial OPEX..."):
             d_lat, d_lon = ports[d_port]
             try: coords = sr.searoute([c_lon, c_lat], [d_lon, d_lat])["geometry"]["coordinates"]
             except: st.error("Routing failed."); st.stop()
             
-            segments, dist_nm, bft_sum, wr_saved = [], 0, 0, 0
+            # 1. Hız Tanımlamaları ve ML Fonksiyonu
+            max_v = d_speed
+            norm_v = 10.0 + (max_v - 10.0) * (urgency / 100.0)
+            
+            def get_f(v, b, m):
+                if st.session_state.ai_model:
+                    return st.session_state.ai_model.predict(pd.DataFrame([[v, d_draft, b, m]], columns=['Speed_Knots', 'Draft_m', 'Beaufort', 'Months_Drydock']))[0]
+                return calculate_fuel(v, d_draft, st.session_state.calc_wind_area, b, d_speed, d_draft, d_cons, beam, m)
+
+            # 2. Ticari Rota Analizi (Maaş & Yakıt Trade-off)
+            segments, dist_nm, bft_sum = [], 0, 0
+            storm_encounters = 0
+            storm_eval_s_cost = 0 # Düz gitmenin TOPLAM dolar maliyeti
+            storm_eval_d_cost = 0 # Dolaşmanın TOPLAM dolar maliyeti
+            extra_days_total = 0
+            wr_active = False
+            wr_saved_usd = 0
+            
             step = max(1, len(coords)//10)
             
             for i in range(0, len(coords)-1, step):
@@ -223,65 +239,75 @@ with tab3:
                 bft = get_live_weather(seg[0][1], seg[0][0], api_weather) if api_weather else 4
                 
                 if bft >= 7:
-                    f_detour = calculate_fuel(d_speed, d_draft, st.session_state.calc_wind_area, 4, d_speed, d_draft, d_cons, beam, months_drydock) * (d*1.15/(d_speed*24))
-                    f_storm = calculate_fuel(d_speed, d_draft, st.session_state.calc_wind_area, bft, d_speed, d_draft, d_cons, beam, months_drydock) * (d/(d_speed*24))
-                    if f_detour < f_storm:
-                        bft, d, wr_saved = 4, d*1.15, wr_saved+(f_storm-f_detour)
+                    storm_encounters += 1
+                    
+                    # Düz geçiş (Fırtına) zamanı ve yakıtı
+                    t_straight = d / (norm_v * 24)
+                    f_straight = get_f(norm_v, bft, months_drydock) * t_straight
+                    cost_s = (f_straight * f_price) + (f_straight * f_co2 * eu_ets) + (t_straight * daily_charter)
+                    
+                    # Etrafından dolaşma zamanı ve yakıtı (+15% mesafe, 4 Bft)
+                    t_detour = (d * 1.15) / (norm_v * 24)
+                    f_detour = get_f(norm_v, 4, months_drydock) * t_detour
+                    cost_d = (f_detour * f_price) + (f_detour * f_co2 * eu_ets) + (t_detour * daily_charter)
+                    
+                    storm_eval_s_cost += cost_s
+                    storm_eval_d_cost += cost_d
+                    
+                    # AI Kararı: Hangi OPEX daha ucuz?
+                    if cost_d < cost_s:
+                        wr_active = True
+                        bft = 4
+                        d *= 1.15
+                        wr_saved_usd += (cost_s - cost_d)
+                        extra_days_total += (t_detour - t_straight)
                         seg = [[c[0]+0.85, c[1]-0.85] for c in seg]
                         segments.append({'c': seg, 'color': '#9b59b6'}) # Purple Detour
-                    else: segments.append({'c': seg, 'color': '#e74c3c'}) # Red Storm
-                else: segments.append({'c': seg, 'color': '#2ecc71'}) # Green Safe
+                    else: 
+                        segments.append({'c': seg, 'color': '#e74c3c'}) # Red Storm
+                else: 
+                    segments.append({'c': seg, 'color': '#2ecc71'}) # Green Safe
                 
                 dist_nm += d
                 bft_sum += bft
                 
             avg_bft = round(bft_sum / len(segments))
             
+            # 3. AIS ve JIT Hesaplamaları
             live_ships, port_queue = get_ais_data(api_ais, coords) if api_ais else [], 0
             for s in live_ships:
                 if get_distance(d_lat, d_lon, s['lat'], s['lon']) <= 30: port_queue += 1
 
-            max_v = d_speed
-            norm_v = 10.0 + (max_v - 10.0) * (urgency / 100.0)
             norm_days = dist_nm / (norm_v * 24)
             wait_hrs = (port_queue * port_ops) / port_terms
             jit_v = max(8.0, dist_nm / ((norm_days + wait_hrs/24) * 24))
 
-            def get_f(v):
-                if st.session_state.ai_model:
-                    return st.session_state.ai_model.predict(pd.DataFrame([[v, d_draft, avg_bft, months_drydock]], columns=['Speed_Knots', 'Draft_m', 'Beaufort', 'Months_Drydock']))[0]
-                return calculate_fuel(v, d_draft, st.session_state.calc_wind_area, avg_bft, d_speed, d_draft, d_cons, beam, months_drydock)
-
-            f_norm = get_f(norm_v) * norm_days
-            f_jit = get_f(jit_v) * (dist_nm / (jit_v * 24))
+            f_norm = get_f(norm_v, avg_bft, months_drydock) * norm_days
+            f_jit = get_f(jit_v, avg_bft, months_drydock) * (dist_nm / (jit_v * 24))
+            clean_f = get_f(norm_v, avg_bft, 0) * norm_days
             
-            # --- OPEX LOGIC ---
             def calc_opex(fuel, days):
                 return (fuel * f_price) + (fuel * f_co2 * eu_ets) + (days * daily_charter)
                 
             opex_norm = calc_opex(f_norm, norm_days) + (wait_hrs * (daily_charter/24))
             opex_jit = calc_opex(f_jit, dist_nm/(jit_v*24)) 
             
-            # --- 2D FLAT MAP (GERİ DÖNDÜRÜLDÜ) ---
+            # --- 2D FLAT MAP ---
             fig_map = go.Figure()
             for s in segments:
                 fig_map.add_trace(go.Scattergeo(lon=[c[0] for c in s['c']], lat=[c[1] for c in s['c']], mode='lines', line=dict(width=4, color=s['color'])))
             if live_ships:
                 fig_map.add_trace(go.Scattergeo(lon=[v['lon'] for v in live_ships], lat=[v['lat'] for v in live_ships], mode='markers', marker=dict(size=4, color='blue')))
             
-            fig_map.update_layout(
-                dragmode='pan',
-                geo=dict(
-                    projection_type="equirectangular", 
-                    showland=True, 
-                    landcolor="#f0f0f0", 
-                    showocean=True, 
-                    oceancolor="#cce5ff"
-                ),
-                height=600, 
-                margin=dict(l=0, r=0, t=0, b=0)
-            )
+            fig_map.update_layout(dragmode='pan', geo=dict(projection_type="equirectangular", showland=True, landcolor="#f0f0f0", showocean=True, oceancolor="#cce5ff"), height=600, margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(fig_map, use_container_width=True)
+
+            # --- WEATHER ROUTING COMMERCIAL EXPLANATION PANEL ---
+            if storm_encounters > 0:
+                if wr_active:
+                    st.success(f"🌪️ **AI Commercial Weather Routing:** {storm_encounters} storm cell(s) detected. Going straight costs **${storm_eval_s_cost:,.0f}**. Taking a detour adds **{extra_days_total:.1f} days** to the voyage (costing extra crew/charter fees), but fuel/tax savings cover it. Total Detour Cost: **${storm_eval_d_cost:,.0f}**. AI chose the detour (Purple Line), saving the company **${wr_saved_usd:,.0f}** net OPEX!")
+                else:
+                    st.warning(f"🌪️ **AI Commercial Weather Routing:** {storm_encounters} storm cell(s) detected. Going straight costs **${storm_eval_s_cost:,.0f}**. Taking a detour adds extra days. The extra crew/charter cost of the detour (**${storm_eval_d_cost:,.0f}**) is more expensive than burning fuel in the storm. AI chose to punch through the storm (Red Line) to save company money.")
 
             # --- FINANCIAL DASHBOARD ---
             st.markdown("### 💼 Total OPEX (Operational Expense) Optimizer")
@@ -293,7 +319,6 @@ with tab3:
             col_o2.metric("JIT Optimized OPEX", f"${opex_jit:,.0f}", f"{f_jit:,.0f} Tons Fuel", delta_color="off")
             col_o3.metric("EU ETS Tax Burden", f"€{f_norm * f_co2 * eu_ets:,.0f}", f"Fuel: {fuel_type}", delta_color="off")
 
-            # Save for PDF
             st.session_state.voyage_report = {
                 "Destination": d_port, "Distance (Nm)": round(dist_nm), "Avg Weather (Bft)": avg_bft,
                 "Recommended Speed (Knots)": round(jit_v, 1) if opex_norm > opex_jit else round(norm_v, 1),
