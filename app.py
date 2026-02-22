@@ -22,8 +22,8 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # =============================================================================
 # PAGE SETUP & GLOBAL VARIABLES
 # =============================================================================
-st.set_page_config(page_title="Vessel AI & CII Optimizer V11.5", page_icon="🚢", layout="wide")
-st.title("🚢 Ultimate Digital Twin & OPEX Simulator V11.5 (IoT Edition)")
+st.set_page_config(page_title="Vessel AI & CII Optimizer V11.6", page_icon="🚢", layout="wide")
+st.title("🚢 Ultimate Digital Twin & OPEX Simulator V11.6 (Stable IoT)")
 st.markdown("**Modules:** Computer Vision | 5D Explainable AI | Nav & ECA | JIT OPEX | **Live Engine Telemetry** | **Fleet Database** | PDF Export")
 st.markdown("---")
 
@@ -31,7 +31,7 @@ if 'calc_wind_area' not in st.session_state: st.session_state.calc_wind_area = 8
 if 'ai_model' not in st.session_state: st.session_state.ai_model = None
 if 'df_sim' not in st.session_state: st.session_state.df_sim = None
 if 'voyage_report' not in st.session_state: st.session_state.voyage_report = None
-if 'fleet_history' not in st.session_state: st.session_state.fleet_history = [] # YENİ: Filo Veritabanı
+if 'fleet_history' not in st.session_state: st.session_state.fleet_history = [] 
 
 # =============================================================================
 # PHYSICS ENGINE, ECA & API LIBRARIES
@@ -343,46 +343,44 @@ with tab3:
                 "Est. Fuel (Tons)": round(f_jit if opex_norm > opex_jit else f_norm),
                 "Total OPEX ($)": round(min(opex_norm, opex_jit)), "CII Grade": ai_cii_grade
             }
-            # YENİ: Başarılı olan her seferi veritabanına ekle
             st.session_state.fleet_history.append(st.session_state.voyage_report)
 
-# --- TAB 4: LIVE ENGINE IOT TELEMETRY (YENİ) ---
+# --- TAB 4: LIVE ENGINE IOT TELEMETRY ---
 with tab4:
     st.subheader("📡 Engine Control Room (ECR) Live Telemetry")
     st.caption("Simulated real-time Engine Data based on AI-Optimized Speed parameters.")
     
     if st.session_state.voyage_report:
         opt_speed = st.session_state.voyage_report["Recommended Speed"]
-        base_rpm = (opt_speed / d_speed) * 105.0 # Assuming 105 RPM at design speed
-        base_egt = 320.0 + (opt_speed / d_speed) * 80.0 # Exhaust Gas Temp
+        base_rpm = (opt_speed / d_speed) * 105.0 
+        base_egt = 320.0 + (opt_speed / d_speed) * 80.0 
         
         c_i1, c_i2, c_i3, c_i4 = st.columns(4)
-        # Random noise for realism
         c_i1.metric("Main Engine RPM", f"{base_rpm + np.random.uniform(-0.5, 0.5):.1f} RPM", "Optimized", delta_color="normal")
         c_i2.metric("Exhaust Gas Temp (EGT)", f"{base_egt + np.random.uniform(-2.0, 2.0):.1f} °C", "Stable", delta_color="off")
         c_i3.metric("Scavenge Air Press.", f"{2.8 + (opt_speed/d_speed)*0.5 + np.random.uniform(-0.05, 0.05):.2f} Bar", "Normal", delta_color="off")
         c_i4.metric("Dynamic SFOC", f"{175 + np.random.uniform(-1.0, 1.0):.1f} g/kWh", "-1.2 g/kWh", delta_color="inverse")
         
         st.markdown("**📈 24-Hour Telemetry Trend (RPM vs Fuel Flow)**")
-        # Simülasyon veri seti oluşturma (Son 24 saat)
         time_index = pd.date_range(end=pd.Timestamp.now(), periods=100, freq='15min')
         sim_rpm = np.random.normal(base_rpm, 1.5, 100)
         sim_fuel = np.random.normal((d_cons/24) * (opt_speed/d_speed)**3, 0.2, 100)
         
+        # DÜZELTİLEN KISIM: title_font yerine dict içi tanımlama kullanıldı.
         fig_iot = go.Figure()
         fig_iot.add_trace(go.Scatter(x=time_index, y=sim_rpm, name="ME RPM", line=dict(color="cyan")))
         fig_iot.add_trace(go.Scatter(x=time_index, y=sim_fuel, name="Fuel Flow (T/hr)", yaxis="y2", line=dict(color="orange")))
         
         fig_iot.update_layout(
-            yaxis=dict(title="RPM", titlefont=dict(color="cyan"), tickfont=dict(color="cyan")),
-            yaxis2=dict(title="Fuel Flow", titlefont=dict(color="orange"), tickfont=dict(color="orange"), anchor="x", overlaying="y", side="right"),
+            yaxis=dict(title=dict(text="RPM", font=dict(color="cyan")), tickfont=dict(color="cyan")),
+            yaxis2=dict(title=dict(text="Fuel Flow", font=dict(color="orange")), tickfont=dict(color="orange"), anchor="x", overlaying="y", side="right"),
             height=350, margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor="#1e1e1e", paper_bgcolor="#1e1e1e", font=dict(color="white")
         )
         st.plotly_chart(fig_iot, use_container_width=True)
     else:
         st.warning("⚠️ Waiting for Route Analysis to initialize Engine Telemetry...")
 
-# --- TAB 5: REPORTS & FLEET DATABASE (YENİ) ---
+# --- TAB 5: REPORTS & FLEET DATABASE ---
 with tab5:
     st.subheader("🗄️ Fleet Voyage History & Reports")
     
@@ -402,6 +400,6 @@ with tab5:
             st.dataframe(df_history, use_container_width=True)
             
             total_savings = df_history["Total OPEX ($)"].sum()
-            st.success(f"**Total Fleet OPEX:** ${total_savings:,.0f}")
+            st.success(f"**Total Fleet OPEX Logged:** ${total_savings:,.0f}")
         else:
             st.caption("No voyages recorded yet. Run a route analysis to start logging.")
