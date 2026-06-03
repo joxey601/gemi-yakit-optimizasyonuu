@@ -1,4 +1,4 @@
-# 🚢 Ultimate Digital Twin & OPEX Simulator (Vessel AI & CII Optimizer)
+# 🚢 Digital Twin & OPEX Simulator (Vessel AI & CII Optimizer)
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
 ![Streamlit](https://img.shields.io/badge/Streamlit-Framework-FF4B4B.svg)
